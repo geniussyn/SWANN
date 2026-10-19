@@ -110,6 +110,8 @@ def main():
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
+    ap.add_argument("--cache", action="store_true",
+                    help="share one distance table per query across its branch CTAs")
     ap.add_argument("--half", action="store_true",
                     help="store the corpus in fp16 for the search; GT and the "
                          "catalog stay fp32, so recall is still measured against "
@@ -157,7 +159,7 @@ def main():
                 torch.cuda.synchronize(); t = time.perf_counter()
                 ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
                                               budget=B, team_size=a.team, policy=policy,
-                                              stop_eps=a.stop_eps)
+                                              stop_eps=a.stop_eps, shared_cache=a.cache)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
                     best = ms if best is None else min(best, ms)

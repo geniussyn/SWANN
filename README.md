@@ -464,6 +464,50 @@ the thing that makes fan-out affordable. It was dismissed earlier in this README
 on the grounds that the shared single-CTA design had no redundancy left to
 collect; that was true of *that* design and is wrong for this one.
 
+## The global distance cache
+
+A distance belongs to a (query, node) pair, not to a branch. The per-branch
+visited table stays -- it is what keeps a node out of the same branch's queue
+twice -- but the arithmetic now goes through one table per *query*, shared by all
+of its branch CTAs, in L2 with volatile access and `atomicCAS` to claim a slot.
+
+The design has a property worth more than its speed: **a recomputed distance is
+bitwise equal to a cached one**, because the inputs and the reduction order are
+the same. So a miss, a lost race or a full table costs work and never
+correctness -- which is why the probe is bounded at 32 steps and a full table
+just recomputes -- and `test_shared_cache_is_free_of_consequence` asserts that
+the whole search comes out identical with the cache on, with only the distance
+count moving (12/12).
+
+| Q=64, E=100 branches, m=16, B=16 | recall@10 | distances/query | p50 |
+|---|---|---|---|
+| no cache | 0.9953 | 71,963 | 3.06ms |
+| **shared cache** | **0.9953** | **10,212** | **2.51ms** |
+| (shared state, S=8, m=128, for scale) | 0.9938 | 4,234 | 7.95ms |
+
+86% of the distance work is gone and 18% of the time with it; at Q=256 it is 24%
+(9.70 to 7.33ms). The gap between those two numbers is the finding: **after the
+cache, distance computation is no longer what the fan-out kernel spends its time
+on.** A budget sweep separates it -- 0.28ms before any expansion happens, then
+about 0.14ms per expansion across 6400 CTAs -- and the remainder is spread across
+graph reads, two hash probes per neighbour, the candidate sort and the merge,
+with no single dominant term. Narrowing the bitonic sort from a fixed 128 slots
+to `next_pow2(deg)` (21 stages instead of 28) and sizing the cache for the
+overlap that actually occurs rather than the worst case both landed inside the
+noise, which is the same message.
+
+### What is still missing, and it is structural
+
+Native CAGRA `multi_cta` reaches 0.9953 at Q=64 in about 0.74ms against our
+2.51ms. The table above says why: at the same recall our fan-out needs 10,212
+distances where the shared state needs 4,234. A hundred independent queues
+re-discover each other's neighbourhoods even when the distances are free.
+
+CAGRA's multi_cta does not run independent searches -- its CTAs cooperate on one
+candidate list. That is the difference between sharing *distances* and sharing
+*the search*, and it is the next change: a top-m list per query, in global
+memory, that every CTA of that query takes its next expansion from.
+
 ## Running it
 
 ```bash
@@ -496,9 +540,11 @@ call.
 
 ## Next
 
-1. **A per-query visited table shared across CTAs.** Fan-out is the right shape
-   for interactive latency and ours wastes 8.2x on redundant distances. This is
-   the one change with a measured 8x behind it.
+1. **A candidate list shared across a query's CTAs.** The distance cache is done
+   and took 86% of the redundant arithmetic with it; what remains is that 100
+   independent queues still explore 2.4x more nodes than one shared queue needs
+   for the same recall. Sharing the list, not just the distances, is what
+   multi_cta does and is the rest of the 3.4x.
 2. **Close the 1.6x.** Two named causes with numbers on them: a third too many
    distance evaluations (an earlier stopping rule -- top-k unchanged for X
    expansions -- instead of exhausting the queue), and ~1.65 TB/s where the part

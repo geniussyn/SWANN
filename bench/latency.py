@@ -50,6 +50,8 @@ def main():
                     default=["shared:distance:8:128:512", "branch:distance:100:16:16"],
                     help="fanout:arm:E:m:B")
     ap.add_argument("--repeats", type=int, default=20)
+    ap.add_argument("--cache", action="store_true",
+                    help="share one distance table per query across its branch CTAs")
     ap.add_argument("--half", action="store_true")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
@@ -82,7 +84,8 @@ def main():
 
             def run():
                 out["r"] = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=m, budget=B,
-                                         team_size=16, policy=policy, stop_eps=eps)
+                                         team_size=16, policy=policy, stop_eps=eps,
+                                         shared_cache=a.cache)
             p50, p95 = timed(run, a.repeats)
             ids = out["r"][0]
             rec = recall_at_k(ids.cpu().numpy(), gt[:nq])

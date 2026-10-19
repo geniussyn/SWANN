@@ -32,7 +32,8 @@ POLICY_ROUND_ROBIN = 1   # give each seed lineage its turn
 
 METRIC_IP = 0   # distance = 1 - dot. Vectors must be L2-normalised.
 METRIC_L2 = 1   # distance = ||q - x||^2
-NCTR = 4        # expansions, distance evaluations, hash failures, exhausted
+NCTR = 6        # expansions, distance evals, hash failures, exhausted,
+                # cache hits, cache slots claimed
 
 _EXT = None
 
@@ -82,8 +83,8 @@ class SearchState:
     dist: torch.Tensor       # float32[Q, J, m]
     expanded: torch.Tensor   # uint8  [Q, J, m]
     lineage: torch.Tensor    # uint8  [Q, J, m]  which seed this entry descends from
-    visited: torch.Tensor    # int32  [Q, J, H]  open addressing, slot = id+1
-    counters: torch.Tensor   # int32  [Q, J, 4]
+    visited: torch.Tensor    # int32  [Q, J, H]  per branch: keeps its queue unique
+    counters: torch.Tensor   # int32  [Q, J, 6]
     max_expansions: int
     metric: int
     team_size: int
@@ -91,6 +92,10 @@ class SearchState:
     policy: int = POLICY_BEST
     stop_eps: float = -1.0   # < 0 disables early stopping (run the queue out)
     kstop: int = 10          # the k whose current best distance sets the radius
+    # One distance table per *query*, shared by all its branches. Empty tensors
+    # disable it. It changes what is computed, never what is returned.
+    cache_id: torch.Tensor = None
+    cache_d: torch.Tensor = None
 
     @property
     def shape(self):
@@ -112,6 +117,10 @@ class SearchState:
     def exhausted(self) -> torch.Tensor:      # [Q, J] stopped for lack of candidates
         return self.counters[..., 3]
 
+    @property
+    def cache_hits(self) -> torch.Tensor:     # [Q, J] distances another branch had done
+        return self.counters[..., 4]
+
     def check(self):
         """A full visited table means the search dropped nodes. Never continue past it."""
         nf = int(self.hash_failures.sum())
@@ -125,12 +134,29 @@ class SearchState:
         return SearchState(self.ids.clone(), self.dist.clone(), self.expanded.clone(),
                            self.lineage.clone(), self.visited.clone(), self.counters.clone(),
                            self.max_expansions, self.metric, self.team_size,
-                           self.n_seeds, self.policy, self.stop_eps, self.kstop)
+                           self.n_seeds, self.policy, self.stop_eps, self.kstop,
+                           None if self.cache_id is None else self.cache_id.clone(),
+                           None if self.cache_d is None else self.cache_d.clone())
+
+
+def cache_size(J, max_expansions, deg, share=4.0, cap=1 << 20):
+    """Slots for the shared table.
+
+    Sized for what the branches actually touch together, not for the worst case
+    they could: measured on this corpus, 100 branches of 16 expansions reach
+    about an eighth of the nodes their budgets allow, because that overlap is the
+    entire point of sharing. `share` is the assumed overlap factor. Getting it
+    wrong costs nothing but recomputation -- a bounded probe that finds no room
+    just computes the distance -- while sizing for the worst case means clearing
+    a table eight times larger than anything will be written into, every search.
+    """
+    want = 2 * (1 + J * (1 + max_expansions * deg) / share)
+    return min(next_pow2(int(want)), cap)
 
 
 def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
                 metric=METRIC_IP, team_size=32, policy=POLICY_BEST,
-                stop_eps=-1.0, kstop=10) -> SearchState:
+                stop_eps=-1.0, kstop=10, shared_cache=False) -> SearchState:
     """One state per (query, branch).
 
     `seeds` is int32 [Q, J] for one seed per branch, or [Q, J, S] for S seeds
@@ -158,6 +184,16 @@ def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
         max_expansions=max_expansions, metric=metric, team_size=team_size,
         n_seeds=S, policy=policy, stop_eps=float(stop_eps), kstop=int(kstop),
     )
+    if shared_cache and J > 1:
+        Hc = cache_size(J, max_expansions, deg)
+        st.cache_id = torch.zeros((Q, Hc), dtype=torch.int32, device=dev)
+        # FLT_MAX, not inf: the kernel's "nothing cached here" sentinel is
+        # FLT_MAX, and inf would read back as a perfectly good distance.
+        st.cache_d = torch.full((Q, Hc), torch.finfo(torch.float32).max,
+                                dtype=torch.float32, device=dev)
+    else:
+        st.cache_id = torch.empty((0, 0), dtype=torch.int32, device=dev)
+        st.cache_d = torch.empty((0, 0), dtype=torch.float32, device=dev)
     ext().init_states(X, Qv, seeds, st.ids, st.dist, st.expanded, st.lineage,
                       st.visited, st.counters, metric, team_size)
     return st
@@ -170,7 +206,8 @@ def advance(X, G, Qv, state: SearchState, delta_expansions: int) -> SearchState:
                   state.visited, state.counters, state.metric, state.team_size,
                   int(delta_expansions), int(state.max_expansions),
                   int(state.policy), int(state.n_seeds),
-                  float(state.stop_eps), int(state.kstop))
+                  float(state.stop_eps), int(state.kstop),
+                  state.cache_id, state.cache_d)
     return state
 
 
@@ -209,11 +246,11 @@ def merge_branches(ids: torch.Tensor, dist: torch.Tensor, k: int):
 
 
 def search(X, G, Qv, seeds, k=10, m=16, budget=16, metric=METRIC_IP, team_size=32,
-           policy=POLICY_BEST, stop_eps=-1.0):
+           policy=POLICY_BEST, stop_eps=-1.0, shared_cache=False):
     """init -> advance(budget) -> per-branch best-k -> merged top-k. One shot."""
     st = init_states(X, Qv, seeds, m=m, max_expansions=budget, deg=G.shape[1],
                      metric=metric, team_size=team_size, policy=policy,
-                     stop_eps=stop_eps, kstop=k)
+                     stop_eps=stop_eps, kstop=k, shared_cache=shared_cache)
     advance(X, G, Qv, st, budget)
     st.check()
     bi, bd = branch_topk(st, k)

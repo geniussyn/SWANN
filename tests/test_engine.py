@@ -209,6 +209,35 @@ def test_merge_dedup():
     return "branch merge is an exact dedup'd selection"
 
 
+def test_shared_cache_is_free_of_consequence():
+    """The shared cache changes how much is computed and nothing else.
+
+    A cached distance is bitwise equal to the one it replaces -- same inputs,
+    same reduction order -- so the whole search must come out identical, and the
+    only thing that moves is the distance count.
+    """
+    X, G = toy(seed=79)
+    rng = np.random.default_rng(83)
+    nq, E, m, budget = 16, 24, 32, 12
+    Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
+    Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
+    seeds = torch.from_numpy(rng.integers(0, X.shape[0], (nq, E)).astype(np.int32))
+    Xg, Gg, Qg = to_gpu(X, G, Qv)
+
+    plain = engine.search(Xg, Gg, Qg, seeds, k=10, m=m, budget=budget)
+    cached = engine.search(Xg, Gg, Qg, seeds, k=10, m=m, budget=budget, shared_cache=True)
+    assert torch.equal(plain[0], cached[0]), "ids differ with the cache on"
+    assert torch.equal(plain[1], cached[1]), "distances differ with the cache on"
+    assert torch.equal(plain[2].ids, cached[2].ids), "queues differ"
+    assert torch.equal(plain[2].expansions, cached[2].expansions), "expansions differ"
+    a = float(plain[2].dist_evals.sum(1).float().mean())
+    b = float(cached[2].dist_evals.sum(1).float().mean())
+    hits = float(cached[2].cache_hits.sum(1).float().mean())
+    assert b < a, f"cache saved nothing: {b:.0f} vs {a:.0f}"
+    assert abs((a - b) - hits) < 1e-6, "hits do not account for the saving"
+    return f"identical output, {a:.0f} -> {b:.0f} distances ({100*(1-b/a):.0f}% saved)"
+
+
 def test_determinism():
     """Identical inputs, identical bits, run after run."""
     X, G = toy(seed=41)
@@ -322,7 +351,7 @@ TESTS = [test_cpu_gpu_exact, test_resume_equivalence, test_budget_is_a_state_pro
          test_brute_force_on_complete_graph, test_dead_branch_and_exhaustion,
          test_visited_overflow_is_reported, test_merge_dedup, test_determinism,
          test_multiseed_matches_cpu, test_shared_state_beats_split_branches_on_work,
-         test_early_stop_matches_cpu]
+         test_early_stop_matches_cpu, test_shared_cache_is_free_of_consequence]
 
 if __name__ == "__main__":
     fails = 0

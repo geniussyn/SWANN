@@ -32,7 +32,9 @@
 #define BLOCK   128
 #define MAXM    128   // queue width ceiling (m <= MAXM)
 #define MAXDEG  128   // graph out-degree ceiling (deg <= MAXDEG), == BLOCK for the sort
-#define NCTR    4     // [0] expansions, [1] distance evals, [2] hash failures, [3] exhausted
+#define NCTR    6     // [0] expansions, [1] distance evals, [2] hash failures,
+                      // [3] exhausted, [4] cache hits, [5] cache slots claimed
+#define CPROBE  32    // bounded probe into the shared cache; a miss just recomputes
 
 static const int POLICY_BEST = 0;          // always the nearest unexpanded candidate
 static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (step % S)
@@ -119,6 +121,36 @@ __device__ __forceinline__ void load_vec<__half>(const __half* p, float* out) {
     }
 }
 
+// A distance belongs to a (query, node) pair, not to a branch, so when a query is
+// searched by many branches at once they should compute each one exactly once.
+// The per-branch visited table still exists and still does what it did -- keep a
+// node out of the same branch's queue twice -- but the arithmetic now goes
+// through a table shared by every branch of the query.
+//
+// Nothing about the result changes: a recomputed distance is bitwise equal to
+// the cached one, because the inputs and the reduction order are the same. So a
+// miss, a lost race or a full table costs work and never correctness, and the
+// probe is bounded for the same reason -- past CPROBE steps it is cheaper to
+// recompute than to keep looking.
+//
+// The table lives in L2: accesses are volatile so they bypass the per-SM L1,
+// which is not coherent between the CTAs sharing this query.
+__device__ __forceinline__ int cache_slot(int* table, int H, int key, int* claimed) {
+    unsigned mask = (unsigned)(H - 1);
+    unsigned pos = (2654435761u * (unsigned)key) & mask;
+    for (int probe = 0; probe < CPROBE; ++probe) {
+        int cur = ((volatile int*)table)[pos];
+        if (cur == key + 1) return (int)pos;
+        if (cur == 0) {
+            int old = atomicCAS(&table[pos], 0, key + 1);
+            if (old == 0)       { *claimed = 1; return (int)pos; }
+            if (old == key + 1) return (int)pos;
+        }
+        pos = (pos + 1) & mask;
+    }
+    return -1;                       // give up and compute it; never a failure
+}
+
 template <int TEAM, typename XT>
 __device__ __forceinline__ float team_dist(const float* __restrict__ q,
                                            const XT* __restrict__ x,
@@ -139,14 +171,18 @@ __device__ __forceinline__ float team_dist(const float* __restrict__ q,
     return (metric == METRIC_IP) ? (1.f - acc) : acc;   // meaningful in lane 0
 }
 
-// Sort the MAXDEG candidate slots by (distance, id). Never-filled slots carry
-// FLT_MAX / -1 and land at the end. One element per thread: MAXDEG == BLOCK.
+// Sort the first `n` candidate slots by (distance, id); never-filled slots carry
+// FLT_MAX / -1 and land at the end. `n` is the smallest power of two covering the
+// graph's out-degree rather than MAXDEG: at deg 64 that is 21 compare-exchange
+// stages instead of 28, and 21 barriers instead of 28, on every expansion. In a
+// wide fan-out -- many shallow branches -- that per-expansion fixed cost is what
+// the kernel is actually spending its time on.
 __device__ __forceinline__ void bitonic_sort(int* c_id, float* c_d,
-                                             unsigned char* c_l, int tid) {
-    for (int k = 2; k <= MAXDEG; k <<= 1) {
+                                             unsigned char* c_l, int tid, int n) {
+    for (int k = 2; k <= n; k <<= 1) {
         for (int s = k >> 1; s > 0; s >>= 1) {
             const int i = tid, ixj = tid ^ s;
-            if (ixj > i) {
+            if (tid < n && ixj > i) {
                 const bool asc = ((i & k) == 0);
                 const bool need = asc ? lt(c_d[ixj], c_id[ixj], c_d[i], c_id[i])
                                       : lt(c_d[i], c_id[i], c_d[ixj], c_id[ixj]);
@@ -186,7 +222,8 @@ __global__ void init_kernel(const XT* __restrict__ X,
 
     for (int t = tid; t < D; t += BLOCK) sq[t] = Qv[(size_t)q * D + t];
     for (int t = tid; t < H; t += BLOCK) vis[t] = 0;
-    for (int i = tid; i < MAXDEG; i += BLOCK) { c_id[i] = -1; c_d[i] = FLT_MAX; c_l[i] = 0; }
+    int nsort = 2; while (nsort < S && nsort < MAXDEG) nsort <<= 1;
+    for (int i = tid; i < nsort; i += BLOCK) { c_id[i] = -1; c_d[i] = FLT_MAX; c_l[i] = 0; }
     for (int i = tid; i < NCTR; i += BLOCK) ctr[i] = 0;
     __syncthreads();
 
@@ -212,10 +249,10 @@ __global__ void init_kernel(const XT* __restrict__ X,
         __syncthreads();
     }
 
-    bitonic_sort(c_id, c_d, c_l, tid);
+    bitonic_sort(c_id, c_d, c_l, tid, nsort);
 
     for (int i = tid; i < m; i += BLOCK) {
-        const bool ok = (i < MAXDEG) && (c_id[i] >= 0);
+        const bool ok = (i < nsort) && (c_id[i] >= 0);
         qid[i] = ok ? c_id[i] : -1;
         qd[i]  = ok ? c_d[i]  : FLT_MAX;
         qe[i]  = ok ? 0 : 1;
@@ -231,7 +268,8 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                                unsigned char* lin, int* visited, int* counters,
                                int D, int deg, int J, int m, int H,
                                int metric, int delta, int max_expansions,
-                               int policy, int S, float stop_eps, int kstop) {
+                               int policy, int S, float stop_eps, int kstop,
+                               int* cache_id, float* cache_d, int Hc) {
     const int j = blockIdx.x, q = blockIdx.y;
     const int tid = threadIdx.x;
     const int team = tid / TEAM, lane = tid % TEAM, nteams = BLOCK / TEAM;
@@ -254,11 +292,14 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     float* qd = dist     + bid * m;
     unsigned char* qe = expd + bid * m;
     unsigned char* ql = lin  + bid * m;
+    int*   cid = (Hc > 0) ? cache_id + (size_t)q * Hc : nullptr;
+    float* cdd = (Hc > 0) ? cache_d  + (size_t)q * Hc : nullptr;
 
     for (int t = tid; t < D; t += BLOCK) sq[t] = Qv[(size_t)q * D + t];
     for (int i = tid; i < m; i += BLOCK) {
         s_id[i] = qid[i]; s_d[i] = qd[i]; s_e[i] = qe[i]; s_l[i] = ql[i];
     }
+    int nsort = 2; while (nsort < deg && nsort < MAXDEG) nsort <<= 1;
     // Retirement is re-derived every call rather than stored: it is a function
     // of the state, it is monotone, and a re-check costs no expansion.
     if (tid == 0) s_retired = 0u;
@@ -310,7 +351,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         const int p = s_p;
         const unsigned char plin = (unsigned char)s_plin;
 
-        for (int i = tid; i < MAXDEG; i += BLOCK) { c_id[i] = -1; c_d[i] = FLT_MAX; c_l[i] = 0; }
+        for (int i = tid; i < nsort; i += BLOCK) { c_id[i] = -1; c_d[i] = FLT_MAX; c_l[i] = 0; }
         __syncthreads();
 
         // Expand p. Candidate i keeps the fixed slot i of G[p], so which lane did
@@ -324,18 +365,35 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                     if (lane == 0) isnew = hash_insert(vis, H, v, &ctr[2]);
                     isnew = __shfl_sync(tmask, isnew, 0, TEAM);
                     if (isnew) {
-                        float d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
-                        if (lane == 0) {
-                            c_id[nidx] = v; c_d[nidx] = d; c_l[nidx] = plin;
-                            atomicAdd(&ctr[1], 1);
+                        int slot = -1, claimed = 0;
+                        float d = FLT_MAX;
+                        if (Hc > 0) {
+                            if (lane == 0) {
+                                slot = cache_slot(cid, Hc, v, &claimed);
+                                d = (slot >= 0 && !claimed) ? ((volatile float*)cdd)[slot]
+                                                            : FLT_MAX;
+                            }
+                            slot = __shfl_sync(tmask, slot, 0, TEAM);
+                            d = __shfl_sync(tmask, d, 0, TEAM);
                         }
+                        if (d == FLT_MAX) {                      // not cached yet
+                            d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
+                            if (lane == 0) {
+                                if (slot >= 0) { ((volatile float*)cdd)[slot] = d;
+                                                 atomicAdd(&ctr[5], 1); }
+                                atomicAdd(&ctr[1], 1);
+                            }
+                        } else if (lane == 0) {
+                            atomicAdd(&ctr[4], 1);
+                        }
+                        if (lane == 0) { c_id[nidx] = v; c_d[nidx] = d; c_l[nidx] = plin; }
                     }
                 }
             }
             __syncthreads();
         }
 
-        bitonic_sort(c_id, c_d, c_l, tid);
+        bitonic_sort(c_id, c_d, c_l, tid, nsort);
 
         // Two sorted runs -> best m, one output slot per thread.
         //
@@ -346,14 +404,14 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         // that each thread can run on its own. Same output, same tie-break.
         if (tid < m) {
             const int o = tid;
-            int lo = max(0, o - MAXDEG), hi = min(o, m);
+            int lo = max(0, o - nsort), hi = min(o, m);
             while (lo < hi) {
                 const int i = (lo + hi) >> 1, j = o - i;
                 if (j > 0 && !lt(c_d[j - 1], c_id[j - 1], s_d[i], s_id[i])) lo = i + 1;
                 else                                                       hi = i;
             }
             const int i = lo, j = o - i;
-            const bool takeA = (j >= MAXDEG) ||
+            const bool takeA = (j >= nsort) ||
                                (i < m && lt(s_d[i], s_id[i], c_d[j], c_id[j]));
             if (takeA) { n_id[o] = s_id[i]; n_d[o] = s_d[i]; n_e[o] = s_e[i]; n_l[o] = s_l[i]; }
             else       { n_id[o] = c_id[j]; n_d[o] = c_d[j]; n_e[o] = 0;      n_l[o] = c_l[j]; }
@@ -420,7 +478,7 @@ void init_states(torch::Tensor X, torch::Tensor Qv, torch::Tensor seeds,
     TORCH_CHECK(S <= MAXDEG, "more seeds per branch than MAXDEG");
     TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
-    TORCH_CHECK(counters.size(2) == NCTR, "counters last dim must be 4");
+    TORCH_CHECK(counters.size(2) == NCTR, "counters last dim must be NCTR");
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
     DISPATCH_TEAM(team_size, init_kernel, grid, D * sizeof(float), stream,
@@ -435,7 +493,8 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
              torch::Tensor ids, torch::Tensor dist, torch::Tensor expd,
              torch::Tensor lin, torch::Tensor visited, torch::Tensor counters,
              int64_t metric, int64_t team_size, int64_t delta, int64_t max_expansions,
-             int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop) {
+             int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop,
+             torch::Tensor cache_id, torch::Tensor cache_d) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     TORCH_CHECK(G.is_cuda() && G.scalar_type() == torch::kInt32 && G.is_contiguous(), "G: contiguous cuda int32");
@@ -444,6 +503,13 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
     TORCH_CHECK(deg <= MAXDEG, "graph degree exceeds MAXDEG");
     TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
+    const int Hc = (cache_id.numel() > 0) ? (int)cache_id.size(1) : 0;
+    if (Hc) {
+        TORCH_CHECK(cache_id.scalar_type() == torch::kInt32 && cache_id.is_contiguous() &&
+                    cache_d.scalar_type() == torch::kFloat32 && cache_d.is_contiguous(),
+                    "cache: contiguous int32 / float32");
+        TORCH_CHECK((Hc & (Hc - 1)) == 0, "cache size must be a power of two");
+    }
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
     DISPATCH_TEAM(team_size, advance_kernel, grid, D * sizeof(float), stream,
@@ -451,7 +517,9 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
                   D, deg, J, m, H, (int)metric, (int)delta, (int)max_expansions,
-                  (int)policy, (int)nlineage, (float)stop_eps, (int)kstop);
+                  (int)policy, (int)nlineage, (float)stop_eps, (int)kstop,
+                  Hc ? cache_id.data_ptr<int>() : nullptr,
+                  Hc ? cache_d.data_ptr<float>() : nullptr, Hc);
     C10_CUDA_CHECK(cudaGetLastError());
 }
 
