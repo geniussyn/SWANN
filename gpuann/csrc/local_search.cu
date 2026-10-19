@@ -24,6 +24,7 @@
 #include <torch/extension.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cuda_fp16.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <float.h>
@@ -75,18 +76,54 @@ __device__ __forceinline__ unsigned team_mask(int tid) {
     return (((1u << TEAM) - 1u) << (((tid % 32) / TEAM) * TEAM));
 }
 
-// One distance, computed by a team of TEAM cooperating lanes. The reduction is a
-// strided per-lane sum followed by a halving shuffle tree; refcpu.py replays
-// exactly this order, which is what makes bitwise CPU/GPU agreement testable.
-template <int TEAM>
+// The search reads one full vector per distance and does one multiply-add per
+// element, so it is bound by how many bytes a candidate costs, not by the
+// arithmetic -- measured at 1.76 TB/s on a part whose HBM is about 1.8. Storing
+// the corpus in half therefore buys close to the factor its size says it should.
+// The query stays in fp32 in shared memory and accumulation stays in fp32: only
+// the bytes crossing the bus shrink.
+// A lane loads 16 bytes at a time -- 4 floats or 8 halves -- so a 32-lane team
+// pulls 512 contiguous bytes per step. Element-at-a-time half loads move two
+// bytes per lane per instruction and leave most of the bus idle, which is the
+// difference between 1.3 and 1.8 TB/s on this part.
+template <typename T> struct Vec;
+template <> struct Vec<float>  { static const int N = 4; };
+template <> struct Vec<__half> { static const int N = 8; };
+
+template <typename T>
+__device__ __forceinline__ void load_vec(const T* p, float* out);
+
+template <>
+__device__ __forceinline__ void load_vec<float>(const float* p, float* out) {
+    const float4 v = *reinterpret_cast<const float4*>(p);
+    out[0] = v.x; out[1] = v.y; out[2] = v.z; out[3] = v.w;
+}
+
+template <>
+__device__ __forceinline__ void load_vec<__half>(const __half* p, float* out) {
+    const uint4 raw = *reinterpret_cast<const uint4*>(p);
+    const __half2* h = reinterpret_cast<const __half2*>(&raw);
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const float2 f = __half22float2(h[i]);
+        out[2 * i] = f.x; out[2 * i + 1] = f.y;
+    }
+}
+
+template <int TEAM, typename XT>
 __device__ __forceinline__ float team_dist(const float* __restrict__ q,
-                                           const float* __restrict__ x,
+                                           const XT* __restrict__ x,
                                            int D, int metric, int lane, unsigned tmask) {
-    float acc = 0.f;
-    if (metric == METRIC_IP) {
-        for (int t = lane; t < D; t += TEAM) acc += q[t] * x[t];
-    } else {
-        for (int t = lane; t < D; t += TEAM) { float df = q[t] - x[t]; acc += df * df; }
+    constexpr int V = Vec<XT>::N;
+    float acc = 0.f, buf[V];
+    for (int base = lane * V; base < D; base += TEAM * V) {
+        load_vec<XT>(x + base, buf);
+        #pragma unroll
+        for (int i = 0; i < V; ++i) {
+            if (base + i >= D) break;
+            if (metric == METRIC_IP) acc += q[base + i] * buf[i];
+            else { const float df = q[base + i] - buf[i]; acc += df * df; }
+        }
     }
     for (int off = TEAM / 2; off > 0; off >>= 1)
         acc += __shfl_down_sync(tmask, acc, off, TEAM);
@@ -115,8 +152,8 @@ __device__ __forceinline__ void bitonic_sort(int* c_id, float* c_d,
     }
 }
 
-template <int TEAM>
-__global__ void init_kernel(const float* __restrict__ X,
+template <int TEAM, typename XT>
+__global__ void init_kernel(const XT* __restrict__ X,
                             const float* __restrict__ Qv,
                             const int*   __restrict__ seeds,
                             int* ids, float* dist, unsigned char* expd,
@@ -155,7 +192,7 @@ __global__ void init_kernel(const float* __restrict__ X,
                 if (lane == 0) isnew = hash_insert(vis, H, v, &ctr[2]);
                 isnew = __shfl_sync(tmask, isnew, 0, TEAM);
                 if (isnew) {
-                    float d = team_dist<TEAM>(sq, X + (size_t)v * D, D, metric, lane, tmask);
+                    float d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
                     if (lane == 0) {
                         c_id[si] = v; c_d[si] = d; c_l[si] = (unsigned char)si;
                         atomicAdd(&ctr[1], 1);
@@ -177,8 +214,8 @@ __global__ void init_kernel(const float* __restrict__ X,
     }
 }
 
-template <int TEAM>
-__global__ void advance_kernel(const float* __restrict__ X,
+template <int TEAM, typename XT>
+__global__ void advance_kernel(const XT* __restrict__ X,
                                const int*   __restrict__ G,
                                const float* __restrict__ Qv,
                                int* ids, float* dist, unsigned char* expd,
@@ -255,7 +292,7 @@ __global__ void advance_kernel(const float* __restrict__ X,
                     if (lane == 0) isnew = hash_insert(vis, H, v, &ctr[2]);
                     isnew = __shfl_sync(tmask, isnew, 0, TEAM);
                     if (isnew) {
-                        float d = team_dist<TEAM>(sq, X + (size_t)v * D, D, metric, lane, tmask);
+                        float d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
                         if (lane == 0) {
                             c_id[nidx] = v; c_d[nidx] = d; c_l[nidx] = plin;
                             atomicAdd(&ctr[1], 1);
@@ -268,21 +305,27 @@ __global__ void advance_kernel(const float* __restrict__ X,
 
         bitonic_sort(c_id, c_d, c_l, tid);
 
-        // Two sorted runs -> best m. Serial and in one thread: it is 80 elements
-        // against deg full-dimension distances, and it is the merge the CPU
-        // reference performs verbatim.
-        if (tid == 0) {
-            int a = 0, b = 0, o = 0;
-            while (o < m) {
-                const bool ta = (a < m)      && (s_id[a] >= 0);
-                const bool tb = (b < MAXDEG) && (c_id[b] >= 0);
-                if (!ta && !tb) break;
-                const bool takeA = (ta && tb) ? lt(s_d[a], s_id[a], c_d[b], c_id[b]) : ta;
-                if (takeA) { n_id[o] = s_id[a]; n_d[o] = s_d[a]; n_e[o] = s_e[a]; n_l[o] = s_l[a]; ++a; }
-                else       { n_id[o] = c_id[b]; n_d[o] = c_d[b]; n_e[o] = 0;      n_l[o] = c_l[b]; ++b; }
-                ++o;
+        // Two sorted runs -> best m, one output slot per thread.
+        //
+        // The serial two-pointer merge this replaces ran up to m + deg steps in
+        // thread 0 with the other 127 idle, every expansion. Merge-path instead:
+        // output slot o is fed by exactly i elements of the queue and o - i of
+        // the candidates, and that i is found by a binary search of log(m) steps
+        // that each thread can run on its own. Same output, same tie-break.
+        if (tid < m) {
+            const int o = tid;
+            int lo = max(0, o - MAXDEG), hi = min(o, m);
+            while (lo < hi) {
+                const int i = (lo + hi) >> 1, j = o - i;
+                if (j > 0 && !lt(c_d[j - 1], c_id[j - 1], s_d[i], s_id[i])) lo = i + 1;
+                else                                                       hi = i;
             }
-            for (; o < m; ++o) { n_id[o] = -1; n_d[o] = FLT_MAX; n_e[o] = 1; n_l[o] = 0; }
+            const int i = lo, j = o - i;
+            const bool takeA = (j >= MAXDEG) ||
+                               (i < m && lt(s_d[i], s_id[i], c_d[j], c_id[j]));
+            if (takeA) { n_id[o] = s_id[i]; n_d[o] = s_d[i]; n_e[o] = s_e[i]; n_l[o] = s_l[i]; }
+            else       { n_id[o] = c_id[j]; n_d[o] = c_d[j]; n_e[o] = 0;      n_l[o] = c_l[j]; }
+            if (n_id[o] < 0) { n_d[o] = FLT_MAX; n_e[o] = 1; n_l[o] = 0; }   // canonical empty
         }
         __syncthreads();
         for (int i = tid; i < m; i += BLOCK) {
@@ -296,22 +339,36 @@ __global__ void advance_kernel(const float* __restrict__ X,
     }
 }
 
-#define DISPATCH_TEAM(TEAMVAR, KERNEL, GRID, SHMEM, STREAM, ...)                       \
-    do {                                                                       \
-        switch (TEAMVAR) {                                                     \
-            case 4:  KERNEL<4> <<<GRID, BLOCK, SHMEM, STREAM>>>(__VA_ARGS__); break;   \
-            case 8:  KERNEL<8> <<<GRID, BLOCK, SHMEM, STREAM>>>(__VA_ARGS__); break;   \
-            case 16: KERNEL<16><<<GRID, BLOCK, SHMEM, STREAM>>>(__VA_ARGS__); break;   \
-            case 32: KERNEL<32><<<GRID, BLOCK, SHMEM, STREAM>>>(__VA_ARGS__); break;   \
-            default: TORCH_CHECK(false, "team_size must be 4, 8, 16 or 32");   \
-        }                                                                      \
+#define DISPATCH_T(T, TEAMVAR, KERNEL, GRID, SHMEM, STREAM, XPTR, ...)                 \
+    do {                                                                               \
+        switch (TEAMVAR) {                                                             \
+            case 4:  KERNEL<4,  T><<<GRID, BLOCK, SHMEM, STREAM>>>(XPTR, __VA_ARGS__); break; \
+            case 8:  KERNEL<8,  T><<<GRID, BLOCK, SHMEM, STREAM>>>(XPTR, __VA_ARGS__); break; \
+            case 16: KERNEL<16, T><<<GRID, BLOCK, SHMEM, STREAM>>>(XPTR, __VA_ARGS__); break; \
+            case 32: KERNEL<32, T><<<GRID, BLOCK, SHMEM, STREAM>>>(XPTR, __VA_ARGS__); break; \
+            default: TORCH_CHECK(false, "team_size must be 4, 8, 16 or 32");           \
+        }                                                                              \
+    } while (0)
+
+// X may be fp32 or fp16; everything else is identical and the result differs
+// only by the rounding of the stored vectors.
+#define DISPATCH_TEAM(TEAMVAR, KERNEL, GRID, SHMEM, STREAM, X, ...)                    \
+    do {                                                                               \
+        if ((X).scalar_type() == torch::kFloat32)                                      \
+            DISPATCH_T(float, TEAMVAR, KERNEL, GRID, SHMEM, STREAM,                    \
+                       (X).data_ptr<float>(), __VA_ARGS__);                            \
+        else                                                                           \
+            DISPATCH_T(__half, TEAMVAR, KERNEL, GRID, SHMEM, STREAM,                   \
+                       (__half*)(X).data_ptr<at::Half>(), __VA_ARGS__);                \
     } while (0)
 
 static void check_common(const torch::Tensor& X, const torch::Tensor& Qv,
                          const torch::Tensor& ids, const torch::Tensor& dist,
                          const torch::Tensor& expd, const torch::Tensor& visited,
                          const torch::Tensor& counters) {
-    TORCH_CHECK(X.is_cuda() && X.scalar_type() == torch::kFloat32 && X.is_contiguous(), "X: contiguous cuda float32");
+    TORCH_CHECK(X.is_cuda() && X.is_contiguous() &&
+                (X.scalar_type() == torch::kFloat32 || X.scalar_type() == torch::kHalf),
+                "X: contiguous cuda float32 or float16");
     TORCH_CHECK(Qv.is_cuda() && Qv.scalar_type() == torch::kFloat32 && Qv.is_contiguous(), "Q: contiguous cuda float32");
     TORCH_CHECK(ids.scalar_type() == torch::kInt32 && ids.is_contiguous(), "ids: contiguous int32");
     TORCH_CHECK(dist.scalar_type() == torch::kFloat32 && dist.is_contiguous(), "dist: contiguous float32");
@@ -335,7 +392,7 @@ void init_states(torch::Tensor X, torch::Tensor Qv, torch::Tensor seeds,
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
     DISPATCH_TEAM(team_size, init_kernel, grid, D * sizeof(float), stream,
-                  X.data_ptr<float>(), Qv.data_ptr<float>(), seeds.data_ptr<int>(),
+                  X, Qv.data_ptr<float>(), seeds.data_ptr<int>(),
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
                   D, J, S, m, H, (int)metric);
@@ -358,7 +415,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
     DISPATCH_TEAM(team_size, advance_kernel, grid, D * sizeof(float), stream,
-                  X.data_ptr<float>(), G.data_ptr<int>(), Qv.data_ptr<float>(),
+                  X, G.data_ptr<int>(), Qv.data_ptr<float>(),
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
                   D, deg, J, m, H, (int)metric, (int)delta, (int)max_expansions,

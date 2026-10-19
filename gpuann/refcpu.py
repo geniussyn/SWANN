@@ -18,15 +18,27 @@ METRIC_IP, METRIC_L2 = 0, 1
 F32 = np.float32
 
 
-def team_distance(q, x, metric=METRIC_IP, team=32):
-    """One distance, in the kernel's reduction order and rounding."""
+def team_distance(q, x, metric=METRIC_IP, team=32, vec=4):
+    """One distance, in the kernel's reduction order and rounding.
+
+    The kernel gives each lane a contiguous block of `vec` elements per step and
+    strides by team*vec, because 16-byte loads are what saturate the bus. The
+    summation order follows that layout, so this does too -- `vec` is 4 for an
+    fp32 corpus and 8 for fp16.
+    """
     D = len(q)
     lanes = []
     for lane in range(team):
         acc = F32(0.0)
-        for t in range(lane, D, team):
-            term = F32(q[t] * x[t]) if metric == METRIC_IP else F32(F32(q[t] - x[t]) ** 2)
-            acc = F32(acc + term)
+        base = lane * vec
+        while base < D:
+            for i in range(vec):
+                t = base + i
+                if t >= D:
+                    break
+                term = F32(q[t] * x[t]) if metric == METRIC_IP else F32(F32(q[t] - x[t]) ** 2)
+                acc = F32(acc + term)
+            base += team * vec
         lanes.append(acc)
     off = team // 2
     while off > 0:

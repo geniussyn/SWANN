@@ -295,6 +295,66 @@ difficulty-aware pass must see *training* queries, held out from everything it
 is later measured on. That is a design constraint the measurement imposed, and
 it is the next thing to build.
 
+## LID-allocated degree, a faster build, and an honest fp16 comparison
+
+**Build.** The prune was 128 sequential passes over chunks of 1024 nodes -- 12k
+tiny kernel launches. Chunking at 4096 took the build from 40.0s to 7.8s cold
+(2.8s warm), against CAGRA's 4.85s.
+
+**Degree by LID.** `lid_mle` is the Levina-Bickel/Amsaleg MLE over the candidate
+distances the builder already has: no query, no index, no extra pass. Degree is
+allocated by LID *rank* between 0.5x and 1.5x of the target, with the mean pinned
+so the index does not grow. At 100K: LID 5%/median/95% = 11.4/27.8/55.8, degrees
+32..96.
+
+| graph (deg 64, equal total edges) | mean varphi_2 | one piece |
+|---|---|---|
+| ours, flat degree | 1.539 | 73.4% |
+| **ours, LID-allocated** | **1.479** | **74.2%** |
+| CAGRA | 1.328 | 80.8% |
+
+alpha for the prune was swept: 1.0 gives 2.704, **1.2 gives 1.479**, 1.5 gives
+2.011, 2.0 gives 2.206 (at 2.0 almost nothing is pruned and it is a kNN graph
+again). 1.2 was already the default and is the right one.
+
+**The search is at the memory roofline.** At fp32, m=128: 3938 distances/query
+is 52.4 GiB of vector reads for the batch in 31.9ms = **1.76 TB/s**, on a part
+whose HBM is about 1.8. Kernel-level work cannot help from there, and measurement
+agreed: team size 8/16/32 differ by 2%, and replacing the serial merge with a
+parallel merge-path merge (still bitwise identical to the CPU reference) changed
+little. The only levers left are fewer vectors or smaller ones.
+
+**fp16, and the comparison it reverses.** Storing the corpus in half with
+16-byte vectorised loads costs 0.0003 recall and 1.6x less time. But CAGRA gains
+*more* from the same change -- 41.6ms to 11.1ms at recall 0.983, a 3.7x -- and
+with both sides on fp16 the result flips:
+
+| ours (fp16, our graph) | recall@10 | ours ms | CAGRA fp16 ms | |
+|---|---|---|---|---|
+| m=128, S=8 | 0.9852 | 20.98 | 12.70 | 0.61x |
+| m=96, S=8 | 0.9800 | 16.87 | 10.00 | 0.59x |
+| m=64, S=8 | 0.9707 | 12.97 | 7.47 | 0.58x |
+
+**So the earlier 1.22-1.36x was an artefact of CAGRA's fp32 path, not a win.**
+At the precision anyone would actually serve, native CAGRA is about 1.6x ahead of
+us, consistently across the band. Reported here rather than left in the earlier
+table.
+
+The gap decomposes: we run the search at ~1.65 TB/s and CAGRA would need 2.45
+TB/s to do our distance count in its time, so it is doing roughly a third fewer
+distance evaluations as well as moving bytes better. Ours stops only when the
+queue holds no unexpanded candidate, which is thorough and late -- the budget
+sweep at m=128 shows the tail is expensive (0.9770 at 2975 distances, 0.9854 at
+3843) and that budget, not queue width, is the real knob.
+
+**On a global distance cache.** It is already there, and measurement says there
+is nothing left for it to collect: with one shared state per query the visited
+table makes every node's distance computed exactly once, so `dist_evals` equals
+the number of distinct nodes evaluated and no lineage ever recomputes another's
+work (17.9 distances per expansion against 28.1 for split branches). Caching
+*values* rather than ids would only matter if branches were independent again,
+and the measurements say they should not be.
+
 ## Running it
 
 ```bash
@@ -327,19 +387,24 @@ call.
 
 ## Next
 
-1. **The difficulty pass.** Train queries (the lab's MS MARCO train pool, GT
+1. **Close the 1.6x.** Two named causes with numbers on them: a third too many
+   distance evaluations (an earlier stopping rule -- top-k unchanged for X
+   expansions -- instead of exhausting the queue), and ~1.65 TB/s where the part
+   gives 1.8 (occupancy: the fp32 query vector costs 4 KiB of shared memory per
+   CTA and caps us near 6 CTAs/SM).
+2. **The difficulty pass.** Train queries (the lab's MS MARCO train pool, GT
    recomputed on this subset), phi-hat_1 to find the pairs a degree-d builder
    leaves cut, and the manuscript's own repair -- reciprocal bridge, each
    endpoint drops its longest edge -- applied at build time instead of post hoc.
-2. **Build time.** 40s against CAGRA's 4.85s. The prune is 128 sequential passes
-   over chunks of 1024 nodes; it should be one kernel.
-3. **A two-level entry catalog.** Density is the lever that works and P=16384
+3. **varphi_2 1.479 against CAGRA's 1.328.** LID closed part of it at no cost in
+   edges; the query-aware pass is the rest.
+4. **A two-level entry catalog.** Density is the lever that works and P=16384
    costs 3.5ms of flat scoring; a coarse-to-fine catalog should keep the density
    and drop most of the cost.
-4. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
+5. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
    the oracle says entries that reach them are in the pool. No query-independent
    rule finds them and neither does proximity or spread. B (probe then select) is
    the untried source of signal; so is raising the queue ceiling past m=128,
    which is currently where the recall curve ends.
-5. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
+6. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
    not where anything is lost.

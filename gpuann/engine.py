@@ -135,7 +135,7 @@ def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
     The S form is the one that matters: several entries in one state cost barely
     more than one, where several branches cost several times as much.
     """
-    assert X.is_cuda and X.dtype == torch.float32 and X.is_contiguous()
+    assert X.is_cuda and X.dtype in (torch.float32, torch.float16) and X.is_contiguous()
     assert Qv.is_cuda and Qv.dtype == torch.float32 and Qv.is_contiguous()
     seeds = seeds.to(device=X.device, dtype=torch.int32).contiguous()
     if seeds.dim() == 2:

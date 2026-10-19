@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--metric", default="inner_product")
+    ap.add_argument("--half", action="store_true",
+                    help="give CAGRA the same fp16 corpus our search reads")
     ap.add_argument("--arms", nargs="+", default=["from_graph", "built"])
     ap.add_argument("--itopk", type=int, nargs="+", default=[32, 64, 128, 256, 512])
     ap.add_argument("--width", type=int, nargs="+", default=[1, 2, 4])
@@ -69,10 +71,13 @@ def main():
     gt = np.load(a.data / f"gt_{a.split}_ids.npy")
     nq = Q.shape[0]
     res = Resources()
+    if a.half:
+        X = X.astype(np.float16)
+        Q = Q.astype(np.float16)
     Xd, Qd = device_ndarray(X), device_ndarray(Q)
 
     print(f"{man['corpus']} n={man['n']} d={man['d']} deg={man['deg']}  "
-          f"{a.split} q={nq} k={a.k} metric={a.metric}\n")
+          f"{a.split} q={nq} k={a.k} metric={a.metric} dtype={X.dtype}\n")
 
     indexes = {}
     keepalive = []          # from_graph and build do not copy: the caller owns the

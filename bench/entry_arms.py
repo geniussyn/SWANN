@@ -107,6 +107,10 @@ def main():
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
+    ap.add_argument("--half", action="store_true",
+                    help="store the corpus in fp16 for the search; GT and the "
+                         "catalog stay fp32, so recall is still measured against "
+                         "the exact fp32 answer")
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--out", type=Path, default=None)
@@ -120,13 +124,15 @@ def main():
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
     pool = load_pool(a.data, a.pool, a.P)
     arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near)
+    Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time
         if arms.supports(w) and w != "random":
             arms.seeds(w, max(a.E))
 
     print(f"{man['corpus']} n={man['n']} graph={a.graph}  {a.split} q={Q.shape[0]}  "
           f"m={a.m} pool={a.pool}(P={len(pool)}) fanout={a.fanout}"
-          + (f"/{a.policy}" if a.fanout == "shared" else "") + f" tau={a.tau}\n")
+          + (f"/{a.policy}" if a.fanout == "shared" else "")
+          + (" X=fp16" if a.half else "") + f" tau={a.tau}\n")
     print(f"{'arm':13s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
           f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}")
     rows = []
@@ -146,7 +152,7 @@ def main():
             best = None
             for r in range(a.repeats + 1):
                 torch.cuda.synchronize(); t = time.perf_counter()
-                ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, m=a.m,
+                ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
                                               budget=B, team_size=a.team, policy=policy)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
