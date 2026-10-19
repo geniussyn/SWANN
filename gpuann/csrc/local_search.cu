@@ -30,7 +30,7 @@
 #include <float.h>
 
 #define BLOCK   128
-#define MAXM    128   // queue width ceiling (m <= MAXM)
+#define MAXM    256   // queue width ceiling (m <= MAXM)
 #define MAXDEG  128   // graph out-degree ceiling (deg <= MAXDEG), == BLOCK for the sort
 #define NCTR    6     // [0] expansions, [1] distance evals, [2] hash failures,
                       // [3] exhausted, [4] cache hits, [5] cache slots claimed
@@ -416,8 +416,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         // output slot o is fed by exactly i elements of the queue and o - i of
         // the candidates, and that i is found by a binary search of log(m) steps
         // that each thread can run on its own. Same output, same tie-break.
-        if (tid < m) {
-            const int o = tid;
+        for (int o = tid; o < m; o += BLOCK) {
             int lo = max(0, o - nsort), hi = min(o, m);
             while (lo < hi) {
                 const int i = (lo + hi) >> 1, j = o - i;

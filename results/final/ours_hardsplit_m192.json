@@ -1,0 +1,51 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "m": 192,
+  "P": 16384,
+  "pool": "random16k",
+  "tau": 0.05,
+  "L": 32,
+  "n_near": 24,
+  "total_budget": 1024,
+  "per_branch": 0,
+  "nq": 3490,
+  "rows": [
+    {
+      "arm": "distance/rr",
+      "E": 8,
+      "B": 1024,
+      "m": 192,
+      "fanout": "shared",
+      "policy": "rr",
+      "stop_eps": 0.15,
+      "expansions": 145.679931640625,
+      "recall": 0.9921776504297993,
+      "recall_hard": 0.9553008595988539,
+      "dist_per_q": 4321.2666015625,
+      "select_ms": 3.4903039932250977,
+      "search_ms": 48.086149618029594,
+      "total_ms": 51.57645361125469,
+      "qps": 67666.53687174866
+    }
+  ]
+}

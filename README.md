@@ -585,40 +585,48 @@ timed in-process, warm, best of three.
 | m=48 | 0.9623 | 191,927 | 21.33ms | 1.17x |
 | m=64 | 0.9711 | 160,446 | 28.27ms | 1.30x |
 | m=96 | 0.9815 | 125,008 | 39.99ms | 1.43x |
-| m=128 | 0.9861 | 103,540 | 50.92ms | 1.51x |
-| m=128, P=16k | 0.9877 | 98,655 | 55.06ms | **1.56x** |
+| m=128 | 0.9861 | 103,297 | 50.88ms | 1.51x |
+| m=192, P=16k | 0.9922 | 67,667 | 74.31ms | 1.44x |
+| m=256, P=16k | 0.9947 | 56,501 | 97.15ms | **1.57x** |
 
-The advantage grows with recall: a tie at 0.94, half again as fast at 0.986.
+The advantage grows with recall: a tie at 0.94, half again as fast from 0.986 up.
+The queue ceiling is 256; the catalog scan at P=16384 is 3.5ms of flat fp32 and
+is charged to every row that uses it.
 
 ### recall-QPS, hardest 10% of queries
 
-The decile is chosen by phi-hat_1 at out-degree 64 -- index-free, computed from
-the embedding alone -- so **both systems are scored on the same 349 queries**,
-and the choice cannot favour either graph. Those queries average phi-hat_1 7.02
-against 2.46 overall. The batch stays whole at 3490 queries; only the recall is
-restricted, because running 349 queries as their own batch leaves 349 CTAs on
-188 SMs and measures occupancy rather than difficulty (it reverses the result if
-you let it).
+The decile is the lab's, not a new one: `run_cell.py:hard_decile` defines it as
+the queries with the lowest mean recall@10 across a search-effort sweep on a
+*selector* index built independently of everything later compared, then held
+fixed for all arms. `offline/hard_decile.py` reproduces that -- itopk 32 to 512,
+selector built by **CAGRA** at degree 32/64, which is neither measured graph and
+is the other side's builder, so if the choice tilts at all it tilts against us.
+The 349 chosen queries average 0.7232 on the selector against 0.9441 overall.
+
+The batch stays whole at 3490 queries and only the recall is restricted. Running
+349 queries as their own batch leaves 349 CTAs on 188 SMs and measures occupancy
+rather than difficulty -- it reverses the result if you let it.
 
 | ours | hard@10 | all@10 | QPS | CAGRA at the same hard@10 | |
 |---|---|---|---|---|---|
-| m=32 | 0.7524 | 0.9412 | 241,683 | 15.24ms | 1.06x |
-| m=48 | 0.8175 | 0.9623 | 191,927 | 21.17ms | 1.16x |
-| m=64 | 0.8550 | 0.9711 | 160,446 | 28.17ms | 1.30x |
-| m=96 | 0.9026 | 0.9815 | 125,008 | 38.87ms | 1.39x |
-| m=128 | 0.9249 | 0.9861 | 103,540 | 48.26ms | 1.43x |
-| m=128, S=16 | 0.9327 | 0.9873 | 97,990 | 52.84ms | 1.48x |
+| m=32 | 0.7556 | 0.9412 | 243,634 | 17.07ms | 1.19x |
+| m=48 | 0.8178 | 0.9623 | 191,036 | 24.42ms | 1.34x |
+| m=64 | 0.8564 | 0.9711 | 161,776 | 31.31ms | 1.45x |
+| m=96 | 0.9026 | 0.9815 | 125,531 | 42.42ms | 1.53x |
+| m=128, S=16, P=16k | 0.9341 | 0.9883 | 95,593 | 57.37ms | 1.57x |
+| m=256, P=16k | 0.9702 | 0.9947 | 56,501 | 99.82ms | **1.62x** |
 
-**The hard decile is not where the advantage lives.** The speedup profile is the
-same shape as on all queries and slightly smaller at the top -- the same m=128
-run is 1.51x by all-query recall and 1.43x by hard-decile recall. Hard queries
-are proportionally harder for both systems.
+Measured by what a search actually recovers, the hard decile *is* where the
+advantage is a little larger: 1.19-1.62x against 1.02-1.57x on all queries, and
+the gap between the two panels of the figure is visible without reading numbers.
+(An earlier version of this section defined difficulty by phi-hat_1 instead and
+found no such difference. Geometry and recovered-recall do not pick the same
+queries, and the lab's definition is the one its other tables use.)
 
-What does differ, a little, is how much recall each loses on them: at matched
-work ours falls from 0.9861 to 0.9249 (93.8% of its own all-query recall) and
-CAGRA from 0.9826 to 0.9135 (93.0%). A real difference and a small one; the
-multi-entry machinery is not preferentially rescuing fragmented queries at this
-operating point, which is worth knowing before any claim is built on it.
+![recall-QPS](results/final/fig_recall_qps.png)
+
+`bench/fig_recall_qps.py` draws it in the lab's `housestyle`, both panels off one
+set of runs: same batch, same timings, recall read twice.
 
 ## Running it
 
