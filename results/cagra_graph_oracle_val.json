@@ -1,0 +1,56 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "val",
+  "k": 10,
+  "m": 16,
+  "P": 512,
+  "branch_budget": 16,
+  "nq": 3490,
+  "mean_single_seed": 0.7914464877328078,
+  "whole_pool": 0.9996275071633237,
+  "rows": [
+    {
+      "E": 1,
+      "oracle": 0.9309742450714111,
+      "frac_perfect": 0.6853868194842407
+    },
+    {
+      "E": 2,
+      "oracle": 0.9826360940933228,
+      "frac_perfect": 0.8899713467048711
+    },
+    {
+      "E": 4,
+      "oracle": 0.9985386729240417,
+      "frac_perfect": 0.9873925501432664
+    },
+    {
+      "E": 8,
+      "oracle": 0.9996274709701538,
+      "frac_perfect": 0.9962750716332378
+    },
+    {
+      "E": 16,
+      "oracle": 0.9996274709701538,
+      "frac_perfect": 0.9962750716332378
+    }
+  ]
+}

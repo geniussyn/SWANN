@@ -1,0 +1,128 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "val",
+  "k": 10,
+  "m": 32,
+  "P": 512,
+  "total_budget": 128,
+  "nq": 3490,
+  "rows": [
+    {
+      "arm": "single",
+      "E": 1,
+      "B": 128,
+      "recall": 0.9293696275071633,
+      "dist_per_q": 1448.599365234375,
+      "exp_per_q": 34.12206268310547,
+      "batch_ms": 11.85678318142891,
+      "qps": 294346.2781259534,
+      "select_ms": 0.5589759945869446
+    },
+    {
+      "arm": "random",
+      "E": 2,
+      "B": 64,
+      "recall": 0.9378223495702006,
+      "dist_per_q": 3300.971923828125,
+      "exp_per_q": 75.14154815673828,
+      "batch_ms": 22.471003234386444,
+      "qps": 155311.26775236265,
+      "select_ms": 0.0
+    },
+    {
+      "arm": "distance",
+      "E": 2,
+      "B": 64,
+      "recall": 0.9377936962750718,
+      "dist_per_q": 2923.98681640625,
+      "exp_per_q": 68.73094177246094,
+      "batch_ms": 18.835867755115032,
+      "qps": 185284.8005397714,
+      "select_ms": 0.33423998951911926
+    },
+    {
+      "arm": "random",
+      "E": 4,
+      "B": 32,
+      "recall": 0.9422349570200574,
+      "dist_per_q": 5766.12060546875,
+      "exp_per_q": 128.0,
+      "batch_ms": 32.82789792865515,
+      "qps": 106312.01570032949,
+      "select_ms": 0.0
+    },
+    {
+      "arm": "distance",
+      "E": 4,
+      "B": 32,
+      "recall": 0.9452435530085962,
+      "dist_per_q": 5496.234375,
+      "exp_per_q": 128.0,
+      "batch_ms": 27.99546904861927,
+      "qps": 124663.03007600889,
+      "select_ms": 0.28998398780822754
+    },
+    {
+      "arm": "random",
+      "E": 8,
+      "B": 16,
+      "recall": 0.9351862464183381,
+      "dist_per_q": 6534.470703125,
+      "exp_per_q": 128.0,
+      "batch_ms": 33.62975921481848,
+      "qps": 103777.13315479764,
+      "select_ms": 0.0
+    },
+    {
+      "arm": "distance",
+      "E": 8,
+      "B": 16,
+      "recall": 0.937220630372493,
+      "dist_per_q": 6156.7255859375,
+      "exp_per_q": 128.0,
+      "batch_ms": 26.519641280174255,
+      "qps": 131600.573443996,
+      "select_ms": 0.24719999730587006
+    },
+    {
+      "arm": "random",
+      "E": 16,
+      "B": 8,
+      "recall": 0.941404011461318,
+      "dist_per_q": 7304.6845703125,
+      "exp_per_q": 128.0,
+      "batch_ms": 36.89271491020918,
+      "qps": 94598.62220750324,
+      "select_ms": 0.0
+    },
+    {
+      "arm": "distance",
+      "E": 16,
+      "B": 8,
+      "recall": 0.9493409742120343,
+      "dist_per_q": 6909.87353515625,
+      "exp_per_q": 128.0,
+      "batch_ms": 26.444398798048496,
+      "qps": 131975.01772124044,
+      "select_ms": 0.25673601031303406
+    }
+  ]
+}

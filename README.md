@@ -54,42 +54,78 @@ graph replaces it.
 
 ## Measured so far
 
-`msmarco-1m` first 100K (d=1024, L2-normalised, IP), exact kNN graph deg=64,
-3490 validation queries, k=10, m=16. Nothing is tuned; the test half is untouched.
+`msmarco-1m` first 100K (d=1024, L2-normalised, IP), **CAGRA-built graph**
+(degree 64, cuVS 26.10), 3490 validation queries, k=10. Nothing is tuned and the
+test half is untouched. Every arm below searches the same graph, the same
+vectors and the same queries, and every latency is a batch of all 3490 queries,
+best of three after a warm-up.
 
-Baseline arms, total budget fixed at 128 node expansions per query:
+The exact-kNN stand-in graph was replaced once cuVS was available: it cost about
+8 recall points at equal time, which would have made every comparison a
+comparison against a handicapped baseline. It is kept as `G_knn.npy`.
 
-| arm | E | B/branch | recall@10 | dist/query | batch ms | QPS |
-|---|---|---|---|---|---|---|
-| single   | 1 | 128 | 0.7870 | 670 | 5.60 | 624k |
-| distance | 2 | 64  | 0.8236 | 1373 | 8.49 | 411k |
-| distance | 4 | 32  | 0.8511 | 2806 | 13.46 | 259k |
-| distance | 8 | 16  | 0.8690 | 4784 | 17.65 | 198k |
-| distance | 16 | 8  | 0.8720 | 5754 | 17.66 | 198k |
-| random   | 8 | 16  | 0.8417 | 5250 | 22.34 | 156k |
-| random   | 16 | 8  | 0.8188 | 6203 | 24.21 | 144k |
+### Against native CAGRA, at matched recall
 
-At E=1 the search exhausts after ~19 expansions of its 128: with m=16 the queue
-runs out of unexpanded candidates long before the budget does. The binding
-constraint at low E is the queue width, not the budget.
+`bench/compare.py` reads CAGRA's own recall-latency frontier and reports, for
+each of our configurations, the time CAGRA needs for *that* recall.
+`>1x` means ours is faster.
 
-H0 oracle, P=512 random pool seeds, 16 expansions per branch:
+| ours | recall@10 | ours ms | CAGRA ms | |
+|---|---|---|---|---|
+| m=16, E=1 | 0.8702 | 7.61 | 6.89 | 0.90x |
+| m=24, E=1 | 0.9080 | 10.03 | 9.52 | 0.95x |
+| m=32, E=1 | 0.9294 | 11.86 | 11.78 | 0.99x |
+| **m=48, E=1** | **0.9503** | **15.72** | **17.12** | **1.09x** |
+| **m=64, E=1** | **0.9635** | **19.61** | **21.32** | **1.09x** |
+| m=16, E=8 distance | 0.9372 | 26.42 | 13.60 | 0.51x |
+| m=16, E=16 distance | 0.9493 | 26.29 | 16.86 | 0.64x |
+| m=64, E=2 distance | 0.9646 | 29.60 | 21.86 | 0.74x |
+
+So the engine itself is competitive: at recall 0.95 and above it is about 9%
+faster than native CAGRA, and at lower recall about 1-10% slower. Nothing in it
+has been tuned for speed yet -- the merge is serial in one thread and branches
+do not share a visited set.
+
+### The finding that matters: multi-entry is currently dominated
+
+At a fixed 128 node expansions per query, **every multi-entry arm loses to
+simply making one branch's queue wider**:
+
+| | recall@10 | ms | distances/query |
+|---|---|---|---|
+| E=1, m=64 | 0.9635 | 19.61 | 2495 |
+| E=16, m=16, nearest-by-distance | 0.9493 | 26.29 | 6910 |
+
+Worse recall, 34% more time, 2.8x the distance work. The branches re-evaluate
+each other's nodes -- they hold independent visited tables by design -- and each
+gets a budget too small to go deep. Multiple starting points do not pay for
+themselves here, and no entry selector can be credited for a gain until it beats
+this row.
+
+(At a fixed budget, `m` only matters once `budget > m`: with 16 expansions per
+branch, m=16, 32 and 64 produce bitwise identical results, which is why the
+E>=8 rows repeat.)
+
+### H0 oracle: the headroom is real, and it is at high recall
+
+P=512 random pool seeds, 16 expansions per branch, E=8 -- the *same* 128
+expansions the arms above spend:
 
 | | recall@10 |
 |---|---|
-| one pool seed, alone | 0.6188 |
-| best single seed in the pool | 0.8834 |
-| best 2 / 4 / 8 seeds (exact DP) | 0.9434 / 0.9718 / 0.9753 |
-| the whole 512-seed pool | 0.9753 |
+| one pool seed, alone | 0.7914 |
+| best single seed (exact DP, E=1) | 0.9310 |
+| best 2 / 4 / 8 seeds (exact DP) | 0.9826 / 0.9985 / **0.9996** |
+| measured, nearest-by-distance E=8 | 0.9372 |
 
-**The gap worth working on: 0.869 measured against 0.975 available**, at the
-same E=8 and the same per-branch budget. Choosing eight entries well is worth
-about 10 recall points here, and a perfect selector would reach the pool's own
-ceiling. Eight seeds already exhaust what 512 can cover, so E beyond 8 buys
-nothing — it is selection, not pool size, that is left on the table.
+Selection is worth 0.9372 -> 0.9996 at identical work. And a selector that
+reached it would sit at a recall native CAGRA needs well over 41.6ms to
+approach (its measured frontier ends at 0.9830 @ 41.6ms) while spending 26ms.
 
-Caveat: all of it is on the kNN stand-in graph, and the pool is random nodes,
-not the region representatives A specifies.
+That sharpens what A and B have to show: **the case for multi-entry is at recall
+>= 0.98, not at 0.93**, and it needs near-oracle selection plus a cheaper
+multi-branch cost structure (shared visited, or fewer and deeper branches) to
+survive its own overhead.
 
 ## Running it
 
@@ -103,12 +139,31 @@ python offline/oracle.py    --out results/...
 `GPUANN_DATA` relocates the corpus (default `/dev/shm`, because `/workspace` is
 quota-limited). The CUDA extension builds on first import and caches.
 
+## cuVS
+
+Installed isolated at `/opt/cuvsenv` (3.4GB) because it brings CUDA 12.9
+libraries and torch here is built against 12.8; letting them shadow each other
+in one process is how a comparison becomes a bug report. The CAGRA scripts run
+in their own process:
+
+```bash
+PYTHONPATH=/opt/cuvsenv python offline/build_cagra_graph.py
+PYTHONPATH=/opt/cuvsenv python bench/cagra_native.py --out results/...
+python bench/compare.py
+```
+
+`rm -rf /opt/cuvsenv` undoes it. Note that `cagra.from_graph` and `cagra.build`
+do **not** copy: the caller owns the lifetime of the device arrays, and letting
+one go is an illegal access inside the next search rather than an error at the
+call.
+
 ## Next
 
-1. A real search graph: cuVS CAGRA (also gives the `cagra.from_graph` native
-   baseline the document asks for) or a CAGRA-style prune written here. Every
-   recall number above is provisional until this lands.
-2. Region metadata for A: METIS k-way on the symmetrised graph, representatives,
-   reach sketch.
-3. B: probe, frontier scores, resume by state index. The resume half already
-   works and is tested.
+1. A (reach sketch): METIS k-way on the symmetrised graph, representatives,
+   reach masks, fused greedy. It has to be judged at recall >= 0.98 against the
+   E=1 wide-queue row, not against E=1 at m=16.
+2. B (probe then select): resume already works and is tested; what is missing is
+   frontier scores, survivor selection and the merge that keeps losing probes.
+3. The multi-branch cost structure itself: shared visited across branches is
+   listed in the document as a later optimisation, and the measurement above
+   says it is on the critical path, not an optimisation.
