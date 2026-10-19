@@ -243,6 +243,58 @@ been served -- and behind forever after that. Exact kNN is also O(N^2) and stops
 being cheap at 1M. A real answer needs a fast approximate builder of our own
 (NN-descent) measured on build *and* query together; that is not written yet.
 
+## A builder of our own, and what phi-hat can and cannot drive
+
+`offline/build_graph.py` builds the search graph on the GPU with no cuVS:
+exact top-C candidates, a DiskANN-style robust prune (keep v unless an
+already-kept w satisfies alpha*d(w,v) <= d(u,v)), then reverse edges with a
+re-prune of the union. 40s at 100K against CAGRA's 4.85s -- the prune loop is
+unoptimised and that is the one number here that is worse.
+
+| graph | build | mean varphi_2 | one piece |
+|---|---|---|---|
+| exact kNN (no prune) | 0.92s | 2.287 | 50.6% |
+| **ours (pruned + reverse)** | **40.0s** | **1.539** | **73.4%** |
+| CAGRA | 4.85s | 1.328 | 80.8% |
+
+Searched with the shared round-robin engine, against native CAGRA on *CAGRA's*
+graph, at matched recall:
+
+| ours, on our graph | recall@10 | ours ms | CAGRA ms | |
+|---|---|---|---|---|
+| S=8, m=64 | 0.9679 | 20.27 | 24.80 | 1.22x |
+| S=8, m=96 | 0.9778 | 26.77 | 33.16 | 1.24x |
+| S=8, m=128 | 0.9835 | 33.93 | 43.25 | 1.27x |
+
+Which is the same 1.22-1.27x the CAGRA graph gave us. **The cuVS dependency is
+gone from the query side at no cost**; what it still buys is a build 8x faster,
+and that is an engineering gap, not a quality one.
+
+### phi-hat_1, and why the difficulty pass has to be query-aware
+
+`offline/phihat.py` computes the manuscript's index-free screen --
+`W = min(rank_i(j), rank_j(i))`, `adj = W <= d`, components -- in one corpus
+sweep (1.0s at 100K, no index). It is the natural signal for a builder because
+the threshold in its definition *is* the out-degree budget: raising node u's
+degree from d to d' joins exactly the pairs with rank_u(.) in (d, d'].
+
+On real queries the signal is strong:
+
+| out-degree d | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|
+| phi-hat_1 | 3.994 | 3.146 | 2.490 | 1.970 | 1.569 |
+| Pr[phi=1] | 0.208 | 0.338 | 0.468 | 0.596 | 0.718 |
+
+On the corpus's own neighbourhoods it is flat at **phi-hat_1 = 1.000 for every
+degree from 16 to 256**, with median mutual rank 15 against 99 for queries. A
+document's top-k is centred on an actual document and is always cohesive.
+
+So difficulty is not a property of the corpus that a query-free builder could
+read off: it is a property of where queries land relative to it. A
+difficulty-aware pass must see *training* queries, held out from everything it
+is later measured on. That is a design constraint the measurement imposed, and
+it is the next thing to build.
+
 ## Running it
 
 ```bash
@@ -275,16 +327,19 @@ call.
 
 ## Next
 
-1. **A graph builder of our own.** NN-descent on GPU, measured on build and query
-   together against CAGRA's build + CAGRA's search. Until this exists, "we do not
-   need CAGRA" is a claim with no number behind it.
-2. **A two-level entry catalog.** Density is the lever that works and P=16384
+1. **The difficulty pass.** Train queries (the lab's MS MARCO train pool, GT
+   recomputed on this subset), phi-hat_1 to find the pairs a degree-d builder
+   leaves cut, and the manuscript's own repair -- reciprocal bridge, each
+   endpoint drops its longest edge -- applied at build time instead of post hoc.
+2. **Build time.** 40s against CAGRA's 4.85s. The prune is 128 sequential passes
+   over chunks of 1024 nodes; it should be one kernel.
+3. **A two-level entry catalog.** Density is the lever that works and P=16384
    costs 3.5ms of flat scoring; a coarse-to-fine catalog should keep the density
    and drop most of the cost.
-3. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
+4. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
    the oracle says entries that reach them are in the pool. No query-independent
    rule finds them and neither does proximity or spread. B (probe then select) is
    the untried source of signal; so is raising the queue ceiling past m=128,
    which is currently where the recall curve ends.
-4. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
+5. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
    not where anything is lost.
