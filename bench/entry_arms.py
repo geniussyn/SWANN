@@ -56,6 +56,14 @@ class Arms:
         self.rng = np.random.default_rng(rng_seed)
         self.tau, self.L, self.n_near, self.rng_seed = tau, L, n_near, rng_seed
         self.maskd = self.reps_t = None
+        # Optional second level: a graph over the pool, so the nearest entries
+        # are found by a short search instead of a scan of all P.
+        self.poolX = self.poolG = None
+        px = Path(data) / "pools" / f"poolX_{pool_name}.npy"
+        pg = Path(data) / "pools" / f"poolG_{pool_name}.npy"
+        if px.exists() and pg.exists():
+            self.poolX = torch.from_numpy(np.load(px)).to(Xg.device).contiguous()
+            self.poolG = torch.from_numpy(np.load(pg)).to(Xg.device).contiguous()
         mpath = Path(data) / "pools" / f"mask_{pool_name}_fwd.npy"
         rpath = Path(data) / "pools" / f"reps_{pool_name}.npy"
         if mpath.exists() and rpath.exists():
@@ -63,7 +71,23 @@ class Arms:
             self.reps_t = torch.from_numpy(np.load(rpath)).to(Xg.device)
 
     def supports(self, arm):
-        return arm != "sketch" or self.maskd is not None
+        if arm == "sketch":
+            return self.maskd is not None
+        if arm == "hier":
+            return self.poolG is not None
+        return True
+
+    hier_budget = 24
+    hier_entry_seeds = 4
+    hier_m = 32
+
+    def hier_seeds(self, E):
+        """Where the pool search itself starts: a fixed handful of pool nodes.
+        Fixed rather than random so the arm is reproducible, and few because the
+        pool index is small and converges fast."""
+        g = torch.Generator().manual_seed(7)
+        s = torch.randperm(self.P, generator=g)[: self.hier_entry_seeds]
+        return s.view(1, 1, -1).expand(self.Qg.shape[0], 1, -1).to(torch.int32).to(self.Qg.device)
 
     def seeds(self, arm, E):
         """(seeds[Q,E] int32 on cpu, selection ms, extra info)."""
@@ -77,6 +101,17 @@ class Arms:
             near = torch.topk(cat, E, dim=1, largest=False).indices
             seeds = self.pool_t[near]
             info = {}
+        elif arm == "hier":
+            # One short search in the pool index gives the E nearest entries, at
+            # a few hundred distances instead of P.
+            st = engine.init_states(self.poolX, self.Qg, self.hier_seeds(E),
+                                    m=max(self.hier_m, E), max_expansions=self.hier_budget,
+                                    deg=self.poolG.shape[1], team_size=16,
+                                    policy=engine.POLICY_ROUND_ROBIN)
+            engine.advance(self.poolX, self.poolG, self.Qg, st, self.hier_budget)
+            idx = st.ids[:, 0, :E].long().clamp(min=0)
+            seeds = self.pool_t[idx]
+            info = {"hier_dist": float(st.dist_evals.sum(1).float().mean())}
         elif arm == "spread":
             seeds = select_a.select_spread(self.Qg, self.Xg, self.pool_t, E)
             info = {}
@@ -128,6 +163,9 @@ def main():
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--subset", type=Path, default=None,
                     help="npy of query indices (e.g. the hard decile)")
+    ap.add_argument("--hier-budget", type=int, default=24)
+    ap.add_argument("--hier-seeds", type=int, default=4)
+    ap.add_argument("--hier-m", type=int, default=32)
     ap.add_argument("--hard", type=Path, default=None,
                     help="npy of query indices to report recall on separately, while "
                          "the batch itself stays whole -- otherwise a small subset is "
@@ -151,6 +189,7 @@ def main():
     hard_idx = np.load(a.hard) if a.hard is not None else None
     pool = load_pool(a.data, a.pool, a.P)
     arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near)
+    arms.hier_budget, arms.hier_entry_seeds, arms.hier_m = a.hier_budget, a.hier_seeds, a.hier_m
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time
         if arms.supports(w) and w != "random":
@@ -207,7 +246,7 @@ def main():
             print(f"{name:13s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
                   f"{best:10.2f} {tot:9.2f} {Q.shape[0]/(tot/1e3):8.0f}"
                   + (f" {rec_hard:9.4f}" if rec_hard is not None else "")
-                  + (f"  fallback {info['fallback_rate']:.2f}" if info else ""))
+                  + ("  " + " ".join(f"{k} {v}" for k, v in info.items()) if info else ""))
 
     if a.save_perquery:
         a.save_perquery.parent.mkdir(parents=True, exist_ok=True)
