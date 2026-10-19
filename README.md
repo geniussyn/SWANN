@@ -628,6 +628,52 @@ queries, and the lab's definition is the one its other tables use.)
 `bench/fig_recall_qps.py` draws it in the lab's `housestyle`, both panels off one
 set of runs: same batch, same timings, recall read twice.
 
+## Three corpora, and where the advantage actually is
+
+fp32, test split, each system on the graph its own builder made, QPS over the
+whole batch. `bench/fig_own_decile.py` draws both readings off one set of runs.
+
+![three datasets](results/final/fig_three_datasets.png)
+
+| corpus | d | N | build (ours / CAGRA) | best matched-recall speedup |
+|---|---|---|---|---|
+| MS MARCO | 1024 | 100K | 1.8s / 4.7s | **1.48x** at recall 0.994 |
+| FEVER | 1024 | 500K | 26.2s / 6.0s | **1.86x** at recall 0.972 |
+| GloVe | 100 | 1.18M | 35.5s / 5.5s | **0.77x** at recall 0.930 |
+
+**The advantage is dimension, not difficulty.** At d=1024 the search is bound by
+reading candidate vectors, which is where the team-based 16-byte loads earn their
+keep, and the margin grows with recall (1.15x to 1.86x on FEVER). At d=100 a
+vector costs 400 bytes, the per-expansion fixed costs -- candidate sort, merge,
+two hash probes per neighbour -- dominate instead, and CAGRA's are smaller: we
+lose by 1.3-2.4x across the whole GloVe curve.
+
+Build goes the other way as the corpus grows, because the candidate stage is
+still exact and O(N^2): 2.6x faster than CAGRA at 100K, 4.4x slower at 1.18M.
+NN-descent is the fix and is not written.
+
+Own-decile (each system scored on the queries it does worst on, stratum from its
+own effort sweep) tracks the all-query panel on every corpus. One difference
+holds across all three: our weakest decile is less weak than CAGRA's -- sweep
+mean 0.8413 against 0.8320 on MS MARCO, 0.7425 against 0.6658 on FEVER, 0.4681
+against 0.3635 on GloVe. Even where we lose on throughput, the loss is more
+evenly spread over the queries.
+
+### Entry placement, measured
+
+Entries are the E nearest of P uniformly random pool nodes, so their quality is
+one number: the corpus rank of the nearest pool node, about N/P. Median 18 on MS
+MARCO at P=4096; **202 on GloVe at the same P**. Raising P to 131072 fixes the
+rank and buys recall 0.9116 -> 0.9215, and costs 16ms of flat scan against a
+20ms search.
+
+`offline/build_pool_index.py` gives the pool its own graph so the nearest entries
+are found by a short search instead of a scan: selection goes flat at 1.4-2.4ms
+whatever P is, ~500 distances instead of P. It does not pay -- the approximate
+pool search lands at 0.9079, below the flat scan at P=4096, and strengthening it
+reaches only 0.9104 as the cost climbs back. On this corpus entry placement is
+worth about +0.010 recall and nothing cheap captures it.
+
 ## Running it
 
 ```bash

@@ -181,8 +181,12 @@ def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None)
         cdist = torch.gather(d, 1, o)
         keepn = min(cand.shape[1], 128)
         sub = None if deg_per_node is None else deg_per_node[s:e]
-        out[s:e] = robust_prune(Xg, cand[:, :keepn].contiguous(), cdist[:, :keepn].contiguous(),
-                                deg, alpha=alpha, chunk=B, deg_per_node=sub)[:, :width]
+        kept = robust_prune(Xg, cand[:, :keepn].contiguous(), cdist[:, :keepn].contiguous(),
+                            deg, alpha=alpha, chunk=B, deg_per_node=sub)
+        # The inner call sizes its output by the widest degree *in this chunk*,
+        # which under LID allocation need not be the widest in the corpus; the
+        # rest of the row stays -1.
+        out[s:e, : min(kept.shape[1], width)] = kept[:, :width]
         del V, d
     return out
 
