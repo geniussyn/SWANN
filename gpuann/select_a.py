@@ -110,3 +110,34 @@ def select(Qg, Xg, pool_t, reps_t, maskd, E, tau, L=32, n_near=24, rng_seed=0):
     cand = candidates(cat, L=L, n_near=n_near, rng_seed=rng_seed)
     w = region_weights(Qg, Xg, reps_t, tau)
     return greedy_cover(maskd, w, cand, cat, pool_t, E)
+
+
+def select_spread(Qg, Xg, pool_t, E, n_cand=64):
+    """Near the query, but spread apart from each other.
+
+    The documents a search never reaches are not far from the query -- they are
+    in its exact top-k -- they are far from the piece of the graph the search
+    settled in. So the useful entry is one that is close to the query and *not*
+    close to the entries already chosen. Take the n_cand nearest pool entries and
+    greedily add the one whose nearest already-chosen entry is furthest away:
+    max-min in vector space, over a candidate set that is near by construction.
+
+    No sketch, no regions, no probe. The only extra cost over distance ordering
+    is one n_cand x n_cand Gram matrix per query.
+    """
+    cat = catalog_scores(Qg, Xg, pool_t)                          # [Q, P]
+    cand = torch.topk(cat, n_cand, dim=1, largest=False).indices  # [Q, C]
+    V = Xg[pool_t.long()][cand]                                   # [Q, C, D]
+    pair = 1.0 - torch.bmm(V, V.transpose(1, 2))                  # [Q, C, C]
+    Q, C = cand.shape
+    chosen = torch.zeros((Q, E), dtype=torch.long, device=cand.device)
+    far = torch.full((Q, C), INF, device=cand.device)             # distance to chosen set
+    pick = torch.zeros(Q, dtype=torch.long, device=cand.device)   # start at the nearest
+    for i in range(E):
+        chosen[:, i] = pick
+        far = torch.minimum(far, pair[torch.arange(Q, device=cand.device), pick])
+        far.scatter_(1, pick.view(-1, 1), -INF)                   # never pick twice
+        if i + 1 < E:
+            pick = far.argmax(dim=1)
+    ids = pool_t.long()[cand]
+    return torch.gather(ids, 1, chosen).to(torch.int32)

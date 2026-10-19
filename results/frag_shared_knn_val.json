@@ -1,0 +1,167 @@
+{
+  "graph": "G_knn.npy",
+  "h": 2,
+  "split": "val",
+  "rows": [
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9903737259343148,
+      "frag_hit_rate": 0.9988674971687429,
+      "recall_in_hit": 0.9903737259343148
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.9206258890469418,
+      "frag_hit_rate": 0.7553342816500711,
+      "recall_in_hit": 0.9742176386913229
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.7452497551420177,
+      "frag_hit_rate": 0.6009910918334033,
+      "recall_in_hit": 0.9649083531551701
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.9046131805157595,
+      "frag_hit_rate": 0.8334131532269069,
+      "recall_in_hit": 0.9796694637740484
+    },
+    {
+      "config": "distance:8:16:16",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9699320498301246,
+      "frag_hit_rate": 0.9994337485843715,
+      "recall_in_hit": 0.9699320498301246
+    },
+    {
+      "config": "distance:8:16:16",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.8780938833570413,
+      "frag_hit_rate": 0.7140825035561877,
+      "recall_in_hit": 0.9396893133735239
+    },
+    {
+      "config": "distance:8:16:16",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.6887365328109696,
+      "frag_hit_rate": 0.5489914183107131,
+      "recall_in_hit": 0.928972917929823
+    },
+    {
+      "config": "distance:8:16:16",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.8691690544412608,
+      "frag_hit_rate": 0.8101777186519306,
+      "recall_in_hit": 0.9518575749306409
+    },
+    {
+      "config": "distance:8:64:128:best",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9904303510758777,
+      "frag_hit_rate": 0.9988674971687429,
+      "recall_in_hit": 0.9904303510758777
+    },
+    {
+      "config": "distance:8:64:128:best",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.9223328591749645,
+      "frag_hit_rate": 0.7574679943100996,
+      "recall_in_hit": 0.9743914967599179
+    },
+    {
+      "config": "distance:8:64:128:best",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.746718903036239,
+      "frag_hit_rate": 0.6025064906798501,
+      "recall_in_hit": 0.9653187817732383
+    },
+    {
+      "config": "distance:8:64:128:best",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.9054154727793697,
+      "frag_hit_rate": 0.8342862828034747,
+      "recall_in_hit": 0.9798532087142402
+    },
+    {
+      "config": "distance:8:64:128:rr",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9917327293318233,
+      "frag_hit_rate": 1.0,
+      "recall_in_hit": 0.9917327293318233
+    },
+    {
+      "config": "distance:8:64:128:rr",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.930014224751067,
+      "frag_hit_rate": 0.7702702702702703,
+      "recall_in_hit": 0.9796190927769876
+    },
+    {
+      "config": "distance:8:64:128:rr",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.7718903036238982,
+      "frag_hit_rate": 0.637173328358441,
+      "recall_in_hit": 0.9697740310619841
+    },
+    {
+      "config": "distance:8:64:128:rr",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.9149856733524356,
+      "frag_hit_rate": 0.8475799335971256,
+      "recall_in_hit": 0.9828686269159049
+    },
+    {
+      "config": "distance:16:64:128:rr",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9916194790486977,
+      "frag_hit_rate": 1.0,
+      "recall_in_hit": 0.9916194790486977
+    },
+    {
+      "config": "distance:16:64:128:rr",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.9284495021337127,
+      "frag_hit_rate": 0.7660028449502134,
+      "recall_in_hit": 0.9789987355776829
+    },
+    {
+      "config": "distance:16:64:128:rr",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.7670910871694417,
+      "frag_hit_rate": 0.6306756525659563,
+      "recall_in_hit": 0.968248526965471
+    },
+    {
+      "config": "distance:16:64:128:rr",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.9132091690544414,
+      "frag_hit_rate": 0.8448194387592669,
+      "recall_in_hit": 0.9822400736799017
+    }
+  ]
+}

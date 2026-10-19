@@ -40,34 +40,54 @@ def _key(entry):
     return (entry[1], entry[0])          # (distance, id): the kernel's total order
 
 
-def init_state(X, q, seed, m=16, max_expansions=16, metric=METRIC_IP, team=32):
-    """One branch, one seed. Mirrors init_states in the kernel."""
+POLICY_BEST, POLICY_ROUND_ROBIN = 0, 1
+
+
+def init_state(X, q, seeds, m=16, max_expansions=16, metric=METRIC_IP, team=32,
+               policy=POLICY_BEST):
+    """One branch seeded with one or several entries. Mirrors init_states.
+
+    Entries are (id, distance, expanded, lineage); lineage is the index of the
+    seed an entry descends from, and it is what round-robin expansion keys on.
+    """
     X = np.asarray(X, dtype=np.float32); q = np.asarray(q, dtype=np.float32)
-    if seed < 0:
-        return {"queue": [], "visited": set(), "m": m, "max_expansions": max_expansions,
-                "metric": metric, "team": team,
-                "counters": {"expansions": 0, "dist_evals": 0, "exhausted": 0}}
-    d0 = team_distance(q, X[seed], metric, team)
-    return {"queue": [(int(seed), d0, False)], "visited": {int(seed)},
-            "m": m, "max_expansions": max_expansions, "metric": metric, "team": team,
-            "counters": {"expansions": 0, "dist_evals": 1, "exhausted": 0}}
+    if np.isscalar(seeds) or isinstance(seeds, (int, np.integer)):
+        seeds = [int(seeds)]
+    cand, seen = [], set()
+    for i, s in enumerate(seeds):
+        s = int(s)
+        if s < 0 or s in seen:
+            continue
+        seen.add(s)
+        cand.append((s, team_distance(q, X[s], metric, team), False, i))
+    cand.sort(key=_key)
+    return {"queue": cand[:m], "visited": set(seen), "m": m, "metric": metric, "team": team,
+            "max_expansions": max_expansions, "n_seeds": max(1, len(seeds)), "policy": policy,
+            "counters": {"expansions": 0, "dist_evals": len(cand), "exhausted": 0}}
 
 
 def advance(X, G, q, state, delta_expansions):
-    """Mirrors advance in the kernel, including the stop rule and the merge."""
+    """Mirrors advance in the kernel, including the stop rule, the expansion
+    policy and the merge."""
     X = np.asarray(X, dtype=np.float32); q = np.asarray(q, dtype=np.float32)
     m, metric, team = state["m"], state["metric"], state["team"]
+    S, policy = state.get("n_seeds", 1), state.get("policy", POLICY_BEST)
     queue, visited, ctr = state["queue"], state["visited"], state["counters"]
 
     for _ in range(delta_expansions):
         if ctr["expansions"] >= state["max_expansions"]:
             break
-        slot = next((i for i, e in enumerate(queue) if not e[2]), None)
+        slot = None
+        if policy == POLICY_ROUND_ROBIN and S > 1:
+            want = ctr["expansions"] % S
+            slot = next((i for i, e in enumerate(queue) if not e[2] and e[3] == want), None)
+        if slot is None:
+            slot = next((i for i, e in enumerate(queue) if not e[2]), None)
         if slot is None:
             ctr["exhausted"] = 1
             break
-        p = queue[slot][0]
-        queue[slot] = (p, queue[slot][1], True)
+        p, plin = queue[slot][0], queue[slot][3]
+        queue[slot] = (p, queue[slot][1], True, plin)
         ctr["expansions"] += 1
 
         cand = []
@@ -76,7 +96,7 @@ def advance(X, G, q, state, delta_expansions):
             if v < 0 or v in visited:
                 continue
             visited.add(v)
-            cand.append((v, team_distance(q, X[v], metric, team), False))
+            cand.append((v, team_distance(q, X[v], metric, team), False, plin))
             ctr["dist_evals"] += 1
         cand.sort(key=_key)
 
@@ -91,9 +111,10 @@ def advance(X, G, q, state, delta_expansions):
     return state
 
 
-def run(X, G, q, seed, m=16, budget=16, metric=METRIC_IP, team=32):
+def run(X, G, q, seeds, m=16, budget=16, metric=METRIC_IP, team=32, policy=POLICY_BEST):
     """init + one full-budget advance, the single-shot path."""
-    st = init_state(X, q, seed, m=m, max_expansions=budget, metric=metric, team=team)
+    st = init_state(X, q, seeds, m=m, max_expansions=budget, metric=metric, team=team,
+                    policy=policy)
     return advance(X, G, q, st, budget)
 
 

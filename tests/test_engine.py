@@ -230,9 +230,70 @@ def test_determinism():
     return "5 repeats are bitwise identical"
 
 
+def test_multiseed_matches_cpu():
+    """Several seeds sharing one branch: same queue as the CPU reference, under
+    both expansion policies, with the lineage of every entry agreeing too."""
+    X, G = toy(seed=53)
+    rng = np.random.default_rng(59)
+    nq, S, m, budget = 4, 6, 32, 20
+    Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
+    Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
+    seeds = rng.integers(0, X.shape[0], (nq, 1, S)).astype(np.int32)
+    Xg, Gg, Qg = to_gpu(X, G, Qv)
+    for policy in (engine.POLICY_BEST, engine.POLICY_ROUND_ROBIN):
+        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m, max_expansions=budget,
+                                deg=G.shape[1], policy=policy)
+        engine.advance(Xg, Gg, Qg, st, budget)
+        st.check()
+        gi, gd = st.ids.cpu().numpy(), st.dist.cpu().numpy()
+        gl = st.lineage.cpu().numpy()
+        for q in range(nq):
+            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), m=m, budget=budget, policy=policy)
+            rq = ref["queue"]
+            assert [e[0] for e in rq] == [i for i in gi[q, 0] if i >= 0], f"ids differ, policy {policy}"
+            for slot, e in enumerate(rq):
+                assert np.float32(e[1]) == gd[q, 0, slot], "distance differs"
+                assert int(e[3]) == int(gl[q, 0, slot]), "lineage differs"
+            assert gi[q, 0][0] >= 0
+    return "multi-seed branch matches CPU under both policies"
+
+
+def test_shared_state_beats_split_branches_on_work():
+    """S seeds in one state evaluate each node once; S branches do not.
+
+    Compared per expansion actually performed, because the two structures do not
+    spend the same number of expansions: a shared queue of width m holds roughly
+    m/S live candidates per lineage, so round-robin exhausts early unless m is
+    comfortably larger than S. That is a real constraint on the design, not an
+    artefact of the test.
+    """
+    X, G = toy(seed=61)
+    rng = np.random.default_rng(67)
+    nq, S, budget = 32, 8, 64
+    Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
+    Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
+    seeds = rng.integers(0, X.shape[0], (nq, S)).astype(np.int32)
+    Xg, Gg, Qg = to_gpu(X, G, Qv)
+
+    m = 64
+    split = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m,
+                               max_expansions=budget // S, deg=G.shape[1])
+    engine.advance(Xg, Gg, Qg, split, budget // S)
+    shared = engine.init_states(Xg, Qg, torch.from_numpy(seeds).unsqueeze(1), m=m,
+                                max_expansions=budget, deg=G.shape[1],
+                                policy=engine.POLICY_ROUND_ROBIN)
+    engine.advance(Xg, Gg, Qg, shared, budget)
+    a = (split.dist_evals.sum(1).float() / split.expansions.sum(1).clamp(min=1).float()).mean()
+    b = (shared.dist_evals[:, 0].float() / shared.expansions[:, 0].clamp(min=1).float()).mean()
+    assert float(b) < float(a), f"shared {float(b):.1f} vs split {float(a):.1f} distances/expansion"
+    return (f"shared state: {float(b):.1f} distances per expansion vs {float(a):.1f} "
+            f"for split branches")
+
+
 TESTS = [test_cpu_gpu_exact, test_resume_equivalence, test_budget_is_a_state_property,
          test_brute_force_on_complete_graph, test_dead_branch_and_exhaustion,
-         test_visited_overflow_is_reported, test_merge_dedup, test_determinism]
+         test_visited_overflow_is_reported, test_merge_dedup, test_determinism,
+         test_multiseed_matches_cpu, test_shared_state_beats_split_branches_on_work]
 
 if __name__ == "__main__":
     fails = 0

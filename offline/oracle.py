@@ -77,6 +77,7 @@ def main():
     ap.add_argument("--data", type=Path, default=Path("/dev/shm/gpuann/msmarco-1m-100k"))
     ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--graph", default="G.npy", help="graph file inside --data")
     ap.add_argument("--m", type=int, default=16)
     ap.add_argument("--P", type=int, default=512)
     ap.add_argument("--pool", default="random", help="entry placement, see offline/place_entries.py")
@@ -88,7 +89,7 @@ def main():
     a = ap.parse_args()
 
     man = json.loads((a.data / "manifest.json").read_text())
-    X = np.load(a.data / "X.npy"); G = np.load(a.data / "G.npy")
+    X = np.load(a.data / "X.npy"); G = np.load(a.data / a.graph)
     Q = np.load(a.data / f"Q_{a.split}.npy"); gt = np.load(a.data / f"gt_{a.split}_ids.npy")
     if a.nq:
         Q, gt = Q[: a.nq], gt[: a.nq]
@@ -105,7 +106,7 @@ def main():
     whole_pool = np.array([bin(int(x)).count("1") for x in union_all]) / a.k
 
     oracle = dp_oracle(masks, a.k, a.E)
-    print(f"{man['corpus']} n={man['n']} graph={man['graph']}  {a.split} q={Q.shape[0]}  "
+    print(f"{man['corpus']} n={man['n']} graph={a.graph}  {a.split} q={Q.shape[0]}  "
           f"pool={a.pool} P={len(pool)} per-branch budget={a.budget} m={a.m}\n")
     print(f"mean recall of one pool seed alone      {per_seed.mean():.4f}")
     print(f"best single seed in the pool (oracle 1) {oracle[1].mean() if 1 in oracle else float('nan'):.4f}")

@@ -14,13 +14,19 @@ import argparse, glob, json
 from pathlib import Path
 
 
+def ms(r):
+    """Our rows carry selection and search separately; CAGRA's carry one number.
+    The comparable quantity is everything the query pays for, so selection is in."""
+    return r.get("total_ms", r.get("batch_ms"))
+
+
 def pareto(rows):
     """(recall, ms) kept only where no other point is both better and faster."""
-    pts = sorted({(r["recall"], r["batch_ms"]) for r in rows})
+    pts = sorted({(r["recall"], ms(r)) for r in rows})
     out, best = [], float("inf")
-    for rec, ms in sorted(pts, key=lambda p: (-p[0], p[1])):
-        if ms < best:
-            out.append((rec, ms)); best = ms
+    for rec, t in sorted(pts, key=lambda p: (-p[0], p[1])):
+        if t < best:
+            out.append((rec, t)); best = t
     return sorted(out)
 
 
@@ -61,15 +67,15 @@ def main():
     print(f"{'ours':26s} {'recall@10':>10s} {'ms':>7s} {'CAGRA ms':>9s} {'speedup':>8s}")
     scored = []
     for r in sorted(ours, key=lambda x: x["recall"]):
-        name = f"m={r['m']:<3d} E={r['E']:<3d} {r['arm']}"
-        t = time_at(front, r["recall"])
+        name = f"m={r['m']:<3d} S={r['E']:<3d} {r['arm']}"
+        t, mine = time_at(front, r["recall"]), ms(r)
         if t is None:
-            print(f"{name:26s} {r['recall']:10.4f} {r['batch_ms']:7.2f} {'--':>9s} "
+            print(f"{name:26s} {r['recall']:10.4f} {mine:7.2f} {'--':>9s} "
                   f"{'out of range':>8s}")
             continue
-        sp = t / r["batch_ms"]
+        sp = t / mine
         scored.append((sp, name))
-        print(f"{name:26s} {r['recall']:10.4f} {r['batch_ms']:7.2f} {t:9.2f} {sp:7.2f}x")
+        print(f"{name:26s} {r['recall']:10.4f} {mine:7.2f} {t:9.2f} {sp:7.2f}x")
 
     if scored:
         best = max(scored)

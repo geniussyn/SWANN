@@ -27,6 +27,9 @@ from pathlib import Path
 
 import torch
 
+POLICY_BEST = 0          # expand the nearest unexpanded candidate, always
+POLICY_ROUND_ROBIN = 1   # give each seed lineage its turn
+
 METRIC_IP = 0   # distance = 1 - dot. Vectors must be L2-normalised.
 METRIC_L2 = 1   # distance = ||q - x||^2
 NCTR = 4        # expansions, distance evaluations, hash failures, exhausted
@@ -78,11 +81,14 @@ class SearchState:
     ids: torch.Tensor        # int32  [Q, J, m]  -1 = empty slot
     dist: torch.Tensor       # float32[Q, J, m]
     expanded: torch.Tensor   # uint8  [Q, J, m]
+    lineage: torch.Tensor    # uint8  [Q, J, m]  which seed this entry descends from
     visited: torch.Tensor    # int32  [Q, J, H]  open addressing, slot = id+1
     counters: torch.Tensor   # int32  [Q, J, 4]
     max_expansions: int
     metric: int
     team_size: int
+    n_seeds: int = 1         # seeds per branch; lineage ids run 0..n_seeds-1
+    policy: int = POLICY_BEST
 
     @property
     def shape(self):
@@ -115,17 +121,26 @@ class SearchState:
 
     def clone(self) -> "SearchState":
         return SearchState(self.ids.clone(), self.dist.clone(), self.expanded.clone(),
-                           self.visited.clone(), self.counters.clone(),
-                           self.max_expansions, self.metric, self.team_size)
+                           self.lineage.clone(), self.visited.clone(), self.counters.clone(),
+                           self.max_expansions, self.metric, self.team_size,
+                           self.n_seeds, self.policy)
 
 
 def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
-                metric=METRIC_IP, team_size=32) -> SearchState:
-    """One state per (query, branch). `seeds` is int32 [Q, J]; -1 leaves a branch empty."""
+                metric=METRIC_IP, team_size=32, policy=POLICY_BEST) -> SearchState:
+    """One state per (query, branch).
+
+    `seeds` is int32 [Q, J] for one seed per branch, or [Q, J, S] for S seeds
+    sharing one branch's queue, visited table and budget. -1 is an empty slot.
+    The S form is the one that matters: several entries in one state cost barely
+    more than one, where several branches cost several times as much.
+    """
     assert X.is_cuda and X.dtype == torch.float32 and X.is_contiguous()
     assert Qv.is_cuda and Qv.dtype == torch.float32 and Qv.is_contiguous()
     seeds = seeds.to(device=X.device, dtype=torch.int32).contiguous()
-    Q, J = seeds.shape
+    if seeds.dim() == 2:
+        seeds = seeds.unsqueeze(-1)
+    Q, J, S = seeds.shape
     if deg is None:
         raise ValueError("deg is required: it sizes the visited table")
     H = visited_size(max_expansions, deg)
@@ -134,21 +149,24 @@ def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
         ids=torch.full((Q, J, m), -1, dtype=torch.int32, device=dev),
         dist=torch.full((Q, J, m), float("inf"), dtype=torch.float32, device=dev),
         expanded=torch.ones((Q, J, m), dtype=torch.uint8, device=dev),
+        lineage=torch.zeros((Q, J, m), dtype=torch.uint8, device=dev),
         visited=torch.zeros((Q, J, H), dtype=torch.int32, device=dev),
         counters=torch.zeros((Q, J, NCTR), dtype=torch.int32, device=dev),
         max_expansions=max_expansions, metric=metric, team_size=team_size,
+        n_seeds=S, policy=policy,
     )
-    ext().init_states(X, Qv, seeds, st.ids, st.dist, st.expanded, st.visited,
-                      st.counters, metric, team_size)
+    ext().init_states(X, Qv, seeds, st.ids, st.dist, st.expanded, st.lineage,
+                      st.visited, st.counters, metric, team_size)
     return st
 
 
 def advance(X, G, Qv, state: SearchState, delta_expansions: int) -> SearchState:
     """Advance every branch by up to delta more expansions, in place."""
     assert G.is_cuda and G.dtype == torch.int32 and G.is_contiguous()
-    ext().advance(X, G, Qv, state.ids, state.dist, state.expanded, state.visited,
-                  state.counters, state.metric, state.team_size,
-                  int(delta_expansions), int(state.max_expansions))
+    ext().advance(X, G, Qv, state.ids, state.dist, state.expanded, state.lineage,
+                  state.visited, state.counters, state.metric, state.team_size,
+                  int(delta_expansions), int(state.max_expansions),
+                  int(state.policy), int(state.n_seeds))
     return state
 
 
@@ -186,10 +204,11 @@ def merge_branches(ids: torch.Tensor, dist: torch.Tensor, k: int):
     return best_i.to(torch.int32), best_d
 
 
-def search(X, G, Qv, seeds, k=10, m=16, budget=16, metric=METRIC_IP, team_size=32):
+def search(X, G, Qv, seeds, k=10, m=16, budget=16, metric=METRIC_IP, team_size=32,
+           policy=POLICY_BEST):
     """init -> advance(budget) -> per-branch best-k -> merged top-k. One shot."""
     st = init_states(X, Qv, seeds, m=m, max_expansions=budget, deg=G.shape[1],
-                     metric=metric, team_size=team_size)
+                     metric=metric, team_size=team_size, policy=policy)
     advance(X, G, Qv, st, budget)
     st.check()
     bi, bd = branch_topk(st, k)

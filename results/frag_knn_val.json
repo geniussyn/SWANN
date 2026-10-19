@@ -1,0 +1,135 @@
+{
+  "graph": "G_knn.npy",
+  "h": 2,
+  "split": "val",
+  "rows": [
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9903737259343148,
+      "frag_hit_rate": 0.9988674971687429,
+      "recall_in_hit": 0.9903737259343148
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.9206258890469418,
+      "frag_hit_rate": 0.7553342816500711,
+      "recall_in_hit": 0.9742176386913229
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.7452497551420177,
+      "frag_hit_rate": 0.6009910918334033,
+      "recall_in_hit": 0.9649083531551701
+    },
+    {
+      "config": "distance:1:64:128",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.9046131805157595,
+      "frag_hit_rate": 0.8334131532269069,
+      "recall_in_hit": 0.9796694637740484
+    },
+    {
+      "config": "random:8:16:16",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9590600226500567,
+      "frag_hit_rate": 0.9988674971687429,
+      "recall_in_hit": 0.9590600226500567
+    },
+    {
+      "config": "random:8:16:16",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.8435277382645804,
+      "frag_hit_rate": 0.6792318634423897,
+      "recall_in_hit": 0.9121847411321096
+    },
+    {
+      "config": "random:8:16:16",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.6373163565132224,
+      "frag_hit_rate": 0.5049371919842047,
+      "recall_in_hit": 0.8928501469147895
+    },
+    {
+      "config": "random:8:16:16",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.8416618911174786,
+      "frag_hit_rate": 0.7899830581707372,
+      "recall_in_hit": 0.9302481011506799
+    },
+    {
+      "config": "sketch:8:16:16",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9636466591166479,
+      "frag_hit_rate": 0.9994337485843715,
+      "recall_in_hit": 0.9636466591166479
+    },
+    {
+      "config": "sketch:8:16:16",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.8675675675675677,
+      "frag_hit_rate": 0.7034139402560455,
+      "recall_in_hit": 0.9293216148479306
+    },
+    {
+      "config": "sketch:8:16:16",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.6799216454456416,
+      "frag_hit_rate": 0.5374931983893786,
+      "recall_in_hit": 0.9262682088832921
+    },
+    {
+      "config": "sketch:8:16:16",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.8612893982808023,
+      "frag_hit_rate": 0.8046649156319643,
+      "recall_in_hit": 0.9457974030108701
+    },
+    {
+      "config": "sketch:4:32:32",
+      "bucket": "phi=1",
+      "n": 1766,
+      "recall": 0.9792185730464327,
+      "frag_hit_rate": 0.9988674971687429,
+      "recall_in_hit": 0.9792185730464327
+    },
+    {
+      "config": "sketch:4:32:32",
+      "bucket": "phi=2",
+      "n": 703,
+      "recall": 0.8867709815078237,
+      "frag_hit_rate": 0.701280227596017,
+      "recall_in_hit": 0.9516132674027411
+    },
+    {
+      "config": "sketch:4:32:32",
+      "bucket": "phi>=3",
+      "n": 1021,
+      "recall": 0.693535749265426,
+      "frag_hit_rate": 0.5406196072944358,
+      "recall_in_hit": 0.942058439438459
+    },
+    {
+      "config": "sketch:4:32:32",
+      "bucket": "all",
+      "n": 3490,
+      "recall": 0.8770200573065903,
+      "frag_hit_rate": 0.804863214626825,
+      "recall_in_hit": 0.9627867603583937
+    }
+  ]
+}

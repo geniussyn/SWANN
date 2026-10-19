@@ -70,6 +70,9 @@ class Arms:
             near = torch.topk(cat, E, dim=1, largest=False).indices
             seeds = self.pool_t[near]
             info = {}
+        elif arm == "spread":
+            seeds = select_a.select_spread(self.Qg, self.Xg, self.pool_t, E)
+            info = {}
         elif arm == "sketch":
             seeds, fb = select_a.select(self.Qg, self.Xg, self.pool_t, self.reps_t, self.maskd,
                                         E, self.tau, L=self.L, n_near=self.n_near,
@@ -86,6 +89,7 @@ def main():
     ap.add_argument("--data", type=Path, default=Path("/dev/shm/gpuann/msmarco-1m-100k"))
     ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--graph", default="G.npy", help="graph file inside --data")
     ap.add_argument("--m", type=int, default=16)
     ap.add_argument("--P", type=int, default=512)
     ap.add_argument("--R", type=int, default=128)
@@ -97,6 +101,11 @@ def main():
     ap.add_argument("--per-branch", type=int, default=0, help="0 = total-budget // E")
     ap.add_argument("--E", type=int, nargs="+", default=[1, 2, 4, 8, 16])
     ap.add_argument("--arms", nargs="+", default=["distance", "random", "sketch"])
+    ap.add_argument("--fanout", default="branch", choices=["branch", "shared"],
+                    help="branch: E independent states. shared: E seeds in one state, "
+                         "sharing its queue, visited table and budget.")
+    ap.add_argument("--policy", default="best", choices=["best", "rr"],
+                    help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--repeats", type=int, default=3)
@@ -104,7 +113,7 @@ def main():
     a = ap.parse_args()
 
     man = json.loads((a.data / "manifest.json").read_text())
-    X = np.load(a.data / "X.npy"); G = np.load(a.data / "G.npy")
+    X = np.load(a.data / "X.npy"); G = np.load(a.data / a.graph)
     Q = np.load(a.data / f"Q_{a.split}.npy"); gt = np.load(a.data / f"gt_{a.split}_ids.npy")
     if a.nq:
         Q, gt = Q[: a.nq], gt[: a.nq]
@@ -115,24 +124,30 @@ def main():
         if arms.supports(w) and w != "random":
             arms.seeds(w, max(a.E))
 
-    print(f"{man['corpus']} n={man['n']} graph={man['graph']}  {a.split} q={Q.shape[0]}  "
-          f"m={a.m} pool={a.pool}(P={len(pool)}) tau={a.tau}\n")
-    print(f"{'arm':9s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
+    print(f"{man['corpus']} n={man['n']} graph={a.graph}  {a.split} q={Q.shape[0]}  "
+          f"m={a.m} pool={a.pool}(P={len(pool)}) fanout={a.fanout}"
+          + (f"/{a.policy}" if a.fanout == "shared" else "") + f" tau={a.tau}\n")
+    print(f"{'arm':13s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
           f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}")
     rows = []
+    policy = engine.POLICY_ROUND_ROBIN if a.policy == "rr" else engine.POLICY_BEST
     for E in a.E:
-        B = a.per_branch or max(1, a.total_budget // E)
+        # A shared state spends the whole budget; independent branches split it.
+        B = a.per_branch or (a.total_budget if a.fanout == "shared"
+                             else max(1, a.total_budget // E))
         for arm in a.arms:
             if not arms.supports(arm):
                 continue
             if E == 1 and arm == "random":
                 continue
             seeds, sel_ms, info = arms.seeds(arm, E)
+            if a.fanout == "shared":
+                seeds = seeds.unsqueeze(1)                        # [Q, 1, E]
             best = None
             for r in range(a.repeats + 1):
                 torch.cuda.synchronize(); t = time.perf_counter()
                 ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, m=a.m,
-                                              budget=B, team_size=a.team)
+                                              budget=B, team_size=a.team, policy=policy)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
                     best = ms if best is None else min(best, ms)
@@ -141,10 +156,13 @@ def main():
             de = float(st.dist_evals.sum(1).float().mean())
             tot = best + sel_ms
             name = "single" if (E == 1 and arm == "distance") else arm
-            rows.append(dict(arm=name, E=E, B=B, m=a.m, recall=rec, dist_per_q=de,
+            if a.fanout == "shared" and E > 1:
+                name = f"{name}/{a.policy}"
+            rows.append(dict(arm=name, E=E, B=B, m=a.m, fanout=a.fanout, policy=a.policy,
+                             recall=rec, dist_per_q=de,
                              select_ms=sel_ms, search_ms=best, total_ms=tot,
                              qps=Q.shape[0] / (tot / 1e3), **info))
-            print(f"{name:9s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
+            print(f"{name:13s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
                   f"{best:10.2f} {tot:9.2f} {Q.shape[0]/(tot/1e3):8.0f}"
                   + (f"  fallback {info['fallback_rate']:.2f}" if info else ""))
 

@@ -130,59 +130,118 @@ survive its own overhead.
 ## A (reach sketch): built, measured, and falsified on this corpus
 
 A is implemented end to end -- METIS k-way regions, representatives, the forward
-reach sketch, query-weighted greedy coverage -- and `offline/place_entries.py`
-adds four more placements so the pool itself could be compared rather than
-assumed.
+reach sketch, query-weighted greedy coverage -- and four more placements were
+built so the pool could be compared rather than assumed.
 
-**Placement does not matter.** Five placements of P=512 entries, with 1-4 ids in
-common between them, give the same ceiling at every E (oracle, 1024 val queries):
+**Placement is not a lever.** Five placements of P=512 entries sharing 1-4 ids
+between them give the same oracle ceiling to four decimals at every E (random,
+METIS, k-means, farthest-point, degree hubs; 1-seed 0.763-0.769, E=8
+0.9992-0.9996). Graph regions, geometric regions, maximal spread and pure hubs
+are indistinguishable.
 
-| placement | 1 seed alone | E=1 | E=2 | E=4 | E=8 |
-|---|---|---|---|---|---|
-| random | 0.7634 | 0.9167 | 0.9791 | 0.9982 | 0.9994 |
-| metis | 0.7635 | 0.9166 | 0.9778 | 0.9981 | 0.9992 |
-| kmeans | 0.7635 | 0.9170 | 0.9786 | 0.9984 | 0.9996 |
-| farthest | 0.7694 | 0.9159 | 0.9782 | 0.9981 | 0.9993 |
-| degree (hubs) | 0.7637 | 0.9159 | 0.9770 | 0.9980 | 0.9994 |
+**The sketch maximises its own objective and does not move recall.** The greedy
+lifts F by 38% at E=2 and covers 99.5% of all region weight at E=8; recall moves
+by 0.0008 to 0.0033 and costs 1-2.4ms to choose. The document's own failure test
+applies: the surrogate is mis-specified, not under-optimised. Static,
+query-independent information does not predict which entries recover a query's
+missing top-10.
 
-Graph regions, geometric regions, maximal spread and pure hubs are
-indistinguishable to four decimals. Where the entries sit is not a lever on this
-graph; which of them a query picks still is.
+## Fragments: where the recall actually goes
 
-**The sketch maximises its own objective and does not move recall.** Full val,
-3490 queries, tau tuned on val (and nearly flat from 0.005 to 1.0):
+phi_h (`offline/phi_h.py`, the manuscript's Definition 2.1 unchanged) counts the
+pieces the serving graph cuts a query's exact top-10 into. It is the instrument
+the whole multi-entry argument needed, and it reframes the problem:
 
-| structure | arm | recall@10 | select ms | total ms |
-|---|---|---|---|---|
-| E=1, m=64, B=64 | — | 0.9602 | 0.23 | **17.76** |
-| E=2, m=64, B=64 | distance | 0.9638 | 0.29 | 29.83 |
-| E=2, m=64, B=64 | **sketch (A)** | 0.9646 | 1.06 | 32.07 |
-| E=8, m=16, B=16 | distance | 0.9368 | 0.25 | 26.98 |
-| E=8, m=16, B=16 | **sketch (A)** | 0.9401 | 2.36 | 32.84 |
-
-A beats nearest-by-distance by 0.0008 (E=2) to 0.0033 (E=8) recall, and pays
-1-2.4ms of selection plus a little more search for it. Every row is dominated by
-E=1 with a wider queue.
-
-The design document fixes how to read that: *"proxy F만 좋아지면 영역 또는 도달
-모델이 실제 검색과 맞지 않는 것이다."* F was measured directly:
-
-| | F(distance) | F(sketch) | max possible |
+| graph | mean phi_1 | mean phi_2 | one piece (h=2) |
 |---|---|---|---|
-| E=2 | 16.21 | 22.40 (+38%) | 30.15 |
-| E=8 | 25.88 | 30.00 (+16%) | 30.15 |
+| exact kNN (cheap, unpruned) | 3.887 | 2.287 | 50.6% |
+| CAGRA-built | 3.273 | 1.328 | 80.8% |
 
-The greedy does its job -- at E=8 it covers 99.5% of all available region weight
--- and recall does not follow. The surrogate is mis-specified, not
-under-optimised: **static reach information does not predict which entries
-recover a query's missing top-10 on this graph.** No tuning of tau, of the pool,
-or of the region count addresses that, and none of them was close to binding.
+CAGRA's expensive optimisation step is, measured this way, largely a
+fragmentation repair.
 
-What survives: the oracle gap is unchanged and large (0.9961 available at
-E=2/B=64 against 0.9646 reached), so the information needed to choose entries
-exists -- it simply is not in any query-independent description of where the
-entries are. That is precisely B's hypothesis, and it is now the only one of the
-three with evidence pointing at it.
+Splitting the loss (`bench/fragments.py`, cheap graph, single seed m=64):
+
+| queries | recall@10 | fragments reached | recall *inside* reached fragments |
+|---|---|---|---|
+| phi=1 (51%) | 0.9904 | 0.9989 | 0.9904 |
+| phi=2 (20%) | 0.9206 | 0.7553 | 0.9742 |
+| phi>=3 (29%) | 0.7452 | 0.6010 | 0.9649 |
+
+**Every point of loss is a fragment never reached.** Once a piece is touched it
+is 96-99% recovered on a small budget -- so "recover each fragment and stop" is
+not aspirational, the stopping half is already free. The whole problem is
+arrival.
+
+And the split-branch multi-entry of the original design makes arrival *worse*
+(0.5490 fragments reached at phi>=3, against 0.6010 for one deep wide search):
+eight shallow branches from eight nearby entries see less than one branch that
+is allowed to go deep.
+
+## What works: one state, several seeds, taken in turn
+
+The fix follows from the diagnosis. Keep the seeds, drop the branches: S entries
+share one queue, one visited table and one budget, and every queue entry carries
+the lineage of the seed it descends from so expansion can be taken **in turn
+across lineages**. Sharing removes the duplicated work (17.9 distances per
+expansion against 28.1 for split branches, tested); taking turns stops the
+nearest seed's basin from eating the budget, which is the only reason the extra
+seeds were there.
+
+Both halves are necessary (cheap graph, P=512, m=64, 128 expansions):
+
+| structure | recall@10 | total ms | fragments reached |
+|---|---|---|---|
+| one seed | 0.9046 | 15.69 | 0.8334 |
+| 8 seeds, split branches | 0.8692 | 18.20 | 0.8102 |
+| 8 seeds, shared, nearest-first | 0.9054 | 15.03 | 0.8343 |
+| **8 seeds, shared, round-robin** | **0.9150** | 16.18 | **0.8476** |
+
+Nearest-first sharing changes nothing -- the nearest basin still takes every
+expansion. Round-robin is the whole effect.
+
+The remaining lever is catalog density, not selection rule. Selecting the 8
+entries by coverage (A) or by near-but-spread max-min gives 0.9118 and 0.9114
+against 0.9150 for plain nearest. Enlarging the catalog does what no rule did:
+
+| entry catalog | recall@10 | distances/query in search |
+|---|---|---|
+| P=512 | 0.9150 | 2064 |
+| P=4096 | 0.9226 | 1984 |
+| P=16384 | 0.9337 | 1866 |
+
+A denser catalog makes the *search* cheaper as well as better, and pays for it
+in catalog scoring (3.5ms at P=16384, which a two-level catalog should mostly
+remove -- not done).
+
+### Against native CAGRA, on CAGRA's own graph
+
+Selection cost included, matched recall, 3490 val queries. `>1x` is ours faster:
+
+| ours | recall@10 | ours ms | CAGRA ms | |
+|---|---|---|---|---|
+| S=1, m=64 (the old best) | 0.9635 | 19.61 | 21.28 | 1.09x |
+| S=8, m=64, B=64 | 0.9662 | 18.45 | 23.34 | 1.26x |
+| S=8, m=64 | 0.9718 | 20.93 | 28.41 | **1.36x** |
+| S=8, m=96 | 0.9807 | 30.97 | 37.87 | 1.22x |
+| S=8, m=128 | 0.9854 | 38.09 | 48.55 | 1.27x |
+| S=32, m=128 | 0.9871 | 40.37 | 53.51 | 1.33x |
+
+1.22-1.36x across the whole 0.966-0.987 band, against 1.09x before. The search
+also **stops by itself**: at S=8, m=64 the queue runs out of unexpanded
+candidates at ~96 expansions, so budgets of 128, 192, 256 and 384 all return the
+same answer in the same time. The binding constraint is queue width, never the
+budget.
+
+### Dropping CAGRA: not yet earned
+
+On the cheap exact-kNN graph the same method reaches 0.9337 / 0.9483 / 0.9572 at
+m=64/96/128 (19.8 / 26.6 / 34.1 ms) and cannot reach 0.97 within the queue
+ceiling at all. Build is 0.92s against CAGRA's 4.85s at 100K, so for this corpus
+the cheap graph is ahead on *total* cost until roughly a million queries have
+been served -- and behind forever after that. Exact kNN is also O(N^2) and stops
+being cheap at 1M. A real answer needs a fast approximate builder of our own
+(NN-descent) measured on build *and* query together; that is not written yet.
 
 ## Running it
 
@@ -216,15 +275,16 @@ call.
 
 ## Next
 
-1. **B (probe then select).** The only remaining hypothesis with evidence behind
-   it: static information is now measured to carry no usable signal, while the
-   per-query headroom is 3 recall points at E=2. Resume already works and is
-   tested; frontier scores, survivor selection and the losing-probe merge are
-   what is missing.
-2. **The multi-branch cost structure.** Every multi-entry row still pays 1.5-1.9x
-   the time of the wide-queue row. Shared visited across branches is listed in
-   the document as a later optimisation; the measurements say it is on the
-   critical path. B cannot win on the Pareto until this is addressed, however
-   good its selection is.
-3. C (fused greedy) is on hold. It makes selection cheaper, and selection is not
-   currently where anything is lost.
+1. **A graph builder of our own.** NN-descent on GPU, measured on build and query
+   together against CAGRA's build + CAGRA's search. Until this exists, "we do not
+   need CAGRA" is a claim with no number behind it.
+2. **A two-level entry catalog.** Density is the lever that works and P=16384
+   costs 3.5ms of flat scoring; a coarse-to-fine catalog should keep the density
+   and drop most of the cost.
+3. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
+   the oracle says entries that reach them are in the pool. No query-independent
+   rule finds them and neither does proximity or spread. B (probe then select) is
+   the untried source of signal; so is raising the queue ceiling past m=128,
+   which is currently where the recall curve ends.
+4. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
+   not where anything is lost.
