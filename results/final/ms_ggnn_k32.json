@@ -1,0 +1,93 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "build_seconds": 7.21,
+  "k_build": 32,
+  "tau_build": 0.5,
+  "measure": "cosine",
+  "rows": [
+    {
+      "algo": "ggnn",
+      "itopk": 0.3,
+      "width": 0,
+      "recall": 0.9738968481375359,
+      "recall_hard": null,
+      "batch_ms": 48.63315261900425,
+      "qps": 71761.74712219297
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 0.5,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 59.885839000344276,
+      "qps": 58277.55039016714
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 0.7,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 62.01573461294174,
+      "qps": 56276.04061746759
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 1.0,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 62.46405839920044,
+      "qps": 55872.13014075744
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 1.5,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 62.17801012098789,
+      "qps": 56129.168386203586
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 2.0,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 62.07344587892294,
+      "qps": 56223.71934703613
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 3.0,
+      "width": 0,
+      "recall": 0.9744126074498567,
+      "recall_hard": null,
+      "batch_ms": 62.068396247923374,
+      "qps": 56228.29347901453
+    }
+  ]
+}

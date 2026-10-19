@@ -49,8 +49,9 @@ def pool_ids(n, P, seed=0):
 class Arms:
     """Holds whatever the arms need, so selection can be timed on its own."""
 
-    def __init__(self, Xg, Qg, pool, data, pool_name, R, tau, L, n_near, rng_seed=1234):
-        self.Xg, self.Qg = Xg, Qg
+    def __init__(self, Xg, Qg, pool, data, pool_name, R, tau, L, n_near, rng_seed=1234,
+                 gt=None):
+        self.Xg, self.Qg, self.gt = Xg, Qg, gt
         self.pool_t = torch.from_numpy(pool).to(Xg.device)
         self.P = len(pool)
         self.rng = np.random.default_rng(rng_seed)
@@ -100,6 +101,12 @@ class Arms:
             cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t)
             near = torch.topk(cat, E, dim=1, largest=False).indices
             seeds = self.pool_t[near]
+            info = {}
+        elif arm == "oracle":
+            # Diagnostic only: start from the query's exact top-E. No mechanism
+            # can place entries better than this, so whatever a hierarchy could
+            # buy is bounded by what this row shows.
+            seeds = torch.from_numpy(self.gt[:, :E].astype(np.int32)).to(self.Qg.device)
             info = {}
         elif arm == "hier":
             # One short search in the pool index gives the E nearest entries, at
@@ -188,7 +195,7 @@ def main():
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
     hard_idx = np.load(a.hard) if a.hard is not None else None
     pool = load_pool(a.data, a.pool, a.P)
-    arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near)
+    arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near, gt=gt)
     arms.hier_budget, arms.hier_entry_seeds, arms.hier_m = a.hier_budget, a.hier_seeds, a.hier_m
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time

@@ -674,6 +674,62 @@ pool search lands at 0.9079, below the flat scan at P=4096, and strengthening it
 reaches only 0.9104 as the cost climbs back. On this corpus entry placement is
 worth about +0.010 recall and nothing cheap captures it.
 
+## What entries are actually worth, and GGNN
+
+Two questions settled together, because the answer to one explains the other.
+
+**Does scanning the catalog earn its keep, or should entries just be scattered?**
+It earns it, but not by buying recall -- by buying a cheaper search
+(MS MARCO, m=128, S=8):
+
+| | recall@10 | select | search | total | distances/query |
+|---|---|---|---|---|---|
+| nearest of the pool (scan) | 0.9861 | 0.93ms | 37.18 | **38.11** | 3,528 |
+| random pool entries (free) | 0.9853 | 0.00 | 39.97 | 39.97 | 3,930 |
+
+0.93ms spent returns 2.8ms. In the fan-out regime it matters far more --
+E=100 shallow branches cannot recover from bad starts: 0.9953 at 2.71ms against
+0.9859 at 3.27ms.
+
+**Would a hierarchy let a small queue do the job?** The upper bound settles it:
+hand the search the query's *exact* top-E and no mechanism can beat that.
+
+| m=32 | E=1 | E=2 | E=4 | E=8 |
+|---|---|---|---|---|
+| exact top-E as entries | 0.9291 | 0.9376 | 0.9528 | **0.9818** |
+| catalog, nearest of P=4096 | 0.9262 | 0.9326 | 0.9376 | 0.9412 |
+
+At E=1 the exact nearest neighbour is worth 0.003 over a pool node at rank 18,
+and a denser catalog (P=16384, rank ~6) is worth 0.006. **Proximity is worth
+almost nothing.** The whole gain appears as E grows, because the exact top-8
+contains one member of every fragment of the answer by construction.
+
+So the premise behind the hierarchy -- arrive well and a small queue suffices --
+is right, and "arrive well" does not mean "arrive close". It means "arrive in
+every piece", which is query-specific and is exactly what no placement, no
+coverage sketch, no spread rule and no hierarchy has produced.
+
+The prize is large and now has a number on it: **0.9818 at 225k QPS against our
+best 0.9861 at 91k**, 2.5x, available to whatever can put one entry in each
+fragment without being told where they are.
+
+### GGNN
+
+Built from source (0.9.1, nanobind bindings) and run through the same protocol:
+our fvecs, our ground truth, batch timings. Its `tau_query` does not move recall
+at all, so its curve is traced by `k_build`:
+
+| GGNN | recall@10 | QPS | build |
+|---|---|---|---|
+| k_build=32 | 0.9739 | 71,762 | 7.2s |
+| k_build=64 | 0.9902 | 33,810 | |
+| k_build=96 | 0.9942 | 21,018 | |
+
+At matched recall it is 2.2-2.8x behind ours and about 1.7x behind CAGRA on this
+corpus.
+
+![three way](results/final/fig_three_way.png)
+
 ## Running it
 
 ```bash
