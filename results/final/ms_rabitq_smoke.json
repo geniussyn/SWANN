@@ -1,0 +1,77 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "index": {
+    "n": 100000,
+    "d": 1024,
+    "words": 32,
+    "n_lists": 632,
+    "iters": 25,
+    "seed": 0,
+    "build_seconds": 0.62,
+    "bytes_per_vector": {
+      "code": 128,
+      "scalars": 8,
+      "fp32": 4096
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "probes": 64,
+  "rows": [
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 2000,
+      "width": 2,
+      "recall": 0.7457593123209169,
+      "recall_hard": null,
+      "batch_ms": 24.063835851848125,
+      "qps": 145030.90951445152
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 2000,
+      "width": 10,
+      "recall": 0.7777936962750717,
+      "recall_hard": null,
+      "batch_ms": 26.150640100240707,
+      "qps": 133457.53628294077
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 5000,
+      "width": 2,
+      "recall": 0.824785100286533,
+      "recall_hard": null,
+      "batch_ms": 93.25572103261948,
+      "qps": 37423.97743918842
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 5000,
+      "width": 10,
+      "recall": 0.8730372492836677,
+      "recall_hard": null,
+      "batch_ms": 95.46076972037554,
+      "qps": 36559.52084005751
+    }
+  ]
+}

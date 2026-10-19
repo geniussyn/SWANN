@@ -1,0 +1,87 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9500286532951291,
+      "recall_hard": null,
+      "batch_ms": 16.823094338178635,
+      "qps": 207452.9173910492
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.974785100286533,
+      "recall_hard": null,
+      "batch_ms": 31.24047350138426,
+      "qps": 111714.05580153447
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9891977077363897,
+      "recall_hard": null,
+      "batch_ms": 60.696941800415516,
+      "qps": 57498.77829884517
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9962750716332378,
+      "recall_hard": null,
+      "batch_ms": 115.83160515874624,
+      "qps": 30129.945926390163
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9978796561604583,
+      "recall_hard": null,
+      "batch_ms": 175.7180169224739,
+      "qps": 19861.36687133098
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9984813753581662,
+      "recall_hard": null,
+      "batch_ms": 232.18977637588978,
+      "qps": 15030.80822279648
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "manifest": {
+    "corpus": "glove-100",
+    "n": 1183514,
+    "d": 104,
+    "d_original": 100,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "source": "/dev/shm/annbench/glove-100-angular.hdf5"
+  },
+  "split": "test",
+  "k": 10,
+  "m": 16,
+  "P": 4096,
+  "pool": "random4k",
+  "tau": 0.05,
+  "L": 32,
+  "n_near": 24,
+  "total_budget": 128,
+  "per_branch": 16,
+  "nq": 5000,
+  "rows": [
+    {
+      "arm": "distance",
+      "E": 16,
+      "B": 16,
+      "m": 16,
+      "fanout": "branch",
+      "policy": "best",
+      "stop_eps": 0.02,
+      "expansions": 82.82959747314453,
+      "recall": 0.8678199999999999,
+      "recall_hard": null,
+      "dist_per_q": 3644.191162109375,
+      "select_ms": 0.5945919752120972,
+      "search_ms": 12.29044422507286,
+      "total_ms": 12.885036200284958,
+      "qps": 388047.0277521939
+    }
+  ]
+}

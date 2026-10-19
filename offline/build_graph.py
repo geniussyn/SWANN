@@ -213,6 +213,10 @@ def main():
     if a.lid:
         lid = lid_mle(cdist, k=a.lid_k)
         dpn = degrees_from_lid(lid, a.deg, a.lid_lo, a.lid_hi)
+        # The mean-pinning pass hands its rounding slack to the highest-LID nodes
+        # and can push the widest degree past what the candidate list and the
+        # kernel allow. Clamp there; the mean drops by whatever that costs.
+        dpn = dpn.clamp(max=min(a.cand, 128))
         q = torch.quantile(lid, torch.tensor([0.05, 0.5, 0.95], device=lid.device))
         print(f"LID: 5%/median/95% {q[0]:.1f}/{q[1]:.1f}/{q[2]:.1f}   "
               f"degree {int(dpn.min())}..{int(dpn.max())}, mean {float(dpn.float().mean()):.1f}")

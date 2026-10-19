@@ -1,0 +1,258 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9292263610315187,
+      "recall_hard": null,
+      "batch_ms": 21.40096388757229,
+      "qps": 163076.76693135634,
+      "deg": 128
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9308882521489972,
+      "recall_hard": null,
+      "batch_ms": 11.78785040974617,
+      "qps": 296067.5507991241,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9500286532951291,
+      "recall_hard": null,
+      "batch_ms": 16.823094338178635,
+      "qps": 207452.9173910492,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 48,
+      "width": 4,
+      "recall": 0.9551289398280802,
+      "recall_hard": null,
+      "batch_ms": 18.498487770557404,
+      "qps": 188664.07045200528,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9630659025787967,
+      "recall_hard": null,
+      "batch_ms": 21.711100824177265,
+      "qps": 160747.26142460594,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9683954154727794,
+      "recall_hard": null,
+      "batch_ms": 39.91949278861284,
+      "qps": 87425.96050708172,
+      "deg": 128
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.974785100286533,
+      "recall_hard": null,
+      "batch_ms": 31.24047350138426,
+      "qps": 111714.05580153447,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 96,
+      "width": 4,
+      "recall": 0.9752148997134671,
+      "recall_hard": null,
+      "batch_ms": 31.68795444071293,
+      "qps": 110136.48755806153,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9825787965616046,
+      "recall_hard": null,
+      "batch_ms": 41.72135889530182,
+      "qps": 83650.19961976846,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9864756446991405,
+      "recall_hard": null,
+      "batch_ms": 77.41602323949337,
+      "qps": 45081.10664898627,
+      "deg": 128
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9891977077363897,
+      "recall_hard": null,
+      "batch_ms": 60.696941800415516,
+      "qps": 57498.77829884517,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 192,
+      "width": 4,
+      "recall": 0.9898567335243554,
+      "recall_hard": null,
+      "batch_ms": 61.00241653621197,
+      "qps": 57210.84832644757,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9932091690544413,
+      "recall_hard": null,
+      "batch_ms": 80.48841916024685,
+      "qps": 43360.275135378826,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9955014326647565,
+      "recall_hard": null,
+      "batch_ms": 151.33771300315857,
+      "qps": 23061.006610607103,
+      "deg": 128
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9962464183381089,
+      "recall_hard": null,
+      "batch_ms": 113.87128010392189,
+      "qps": 30648.641139494834,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9962750716332378,
+      "recall_hard": null,
+      "batch_ms": 115.83160515874624,
+      "qps": 30129.945926390163,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9973638968481374,
+      "recall_hard": null,
+      "batch_ms": 150.66435374319553,
+      "qps": 23164.07241190333,
+      "deg": 64
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.997650429799427,
+      "recall_hard": null,
+      "batch_ms": 224.04775116592646,
+      "qps": 15577.03651046851,
+      "deg": 128
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9978796561604583,
+      "recall_hard": null,
+      "batch_ms": 175.7180169224739,
+      "qps": 19861.36687133098,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9984813753581662,
+      "recall_hard": null,
+      "batch_ms": 232.18977637588978,
+      "qps": 15030.80822279648,
+      "deg": 96
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9984813753581662,
+      "recall_hard": null,
+      "batch_ms": 293.5316255316138,
+      "qps": 11889.68988836987,
+      "deg": 128
+    }
+  ]
+}

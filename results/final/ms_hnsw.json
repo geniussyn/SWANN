@@ -1,0 +1,84 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "build_seconds": 40.3,
+  "M": 32,
+  "efc": 200,
+  "threads": 128,
+  "rows": [
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 16,
+      "width": 0,
+      "recall": 0.8041833810888254,
+      "recall_hard": null,
+      "batch_ms": 199.452493339777,
+      "qps": 17497.901086925074
+    },
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 32,
+      "width": 0,
+      "recall": 0.8853868194842407,
+      "recall_hard": null,
+      "batch_ms": 310.8430625870824,
+      "qps": 11227.530609669888
+    },
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 64,
+      "width": 0,
+      "recall": 0.9420916905444128,
+      "recall_hard": null,
+      "batch_ms": 601.2888755649328,
+      "qps": 5804.198517261803
+    },
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 128,
+      "width": 0,
+      "recall": 0.9730372492836676,
+      "recall_hard": null,
+      "batch_ms": 1194.4841677322984,
+      "qps": 2921.7632968929906
+    },
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 256,
+      "width": 0,
+      "recall": 0.9878223495702005,
+      "recall_hard": null,
+      "batch_ms": 2005.2580200135708,
+      "qps": 1740.424406818421
+    },
+    {
+      "algo": "hnsw_cpu",
+      "itopk": 512,
+      "width": 0,
+      "recall": 0.995300859598854,
+      "recall_hard": null,
+      "batch_ms": 3805.5891022086143,
+      "qps": 917.0722078152213
+    }
+  ]
+}

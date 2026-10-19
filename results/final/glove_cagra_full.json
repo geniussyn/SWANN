@@ -1,0 +1,110 @@
+{
+  "manifest": {
+    "corpus": "glove-100",
+    "n": 1183514,
+    "d": 104,
+    "d_original": 100,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "source": "/dev/shm/annbench/glove-100-angular.hdf5"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 5000,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.73492,
+      "recall_hard": null,
+      "batch_ms": 2.5247670710086823,
+      "qps": 1980380.708150802
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 48,
+      "width": 4,
+      "recall": 0.7877400000000001,
+      "recall_hard": null,
+      "batch_ms": 3.7171579897403717,
+      "qps": 1345113.6631266053
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.81028,
+      "recall_hard": null,
+      "batch_ms": 4.368583671748638,
+      "qps": 1144535.7066947562
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 96,
+      "width": 4,
+      "recall": 0.8457400000000002,
+      "recall_hard": null,
+      "batch_ms": 5.952175706624985,
+      "qps": 840028.9652798423
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.8668799999999999,
+      "recall_hard": null,
+      "batch_ms": 7.732262834906578,
+      "qps": 646641.2364344326
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 192,
+      "width": 4,
+      "recall": 0.8943599999999998,
+      "recall_hard": null,
+      "batch_ms": 10.963859036564827,
+      "qps": 456043.805682364
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9118,
+      "recall_hard": null,
+      "batch_ms": 14.357018284499645,
+      "qps": 348261.7282307274
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9319,
+      "recall_hard": null,
+      "batch_ms": 20.574502646923065,
+      "qps": 243019.2401636379
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.94466,
+      "recall_hard": null,
+      "batch_ms": 27.167045511305332,
+      "qps": 184046.51318890357
+    }
+  ]
+}

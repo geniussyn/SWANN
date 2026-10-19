@@ -1,0 +1,190 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "build_seconds": 4.63,
+  "n_lists": 632,
+  "rows": [
+    {
+      "algo": "ivf_pq",
+      "itopk": 8,
+      "width": 1,
+      "recall": 0.69810888252149,
+      "recall_hard": null,
+      "batch_ms": 28.294507414102554,
+      "qps": 123345.49419512118
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 16,
+      "width": 1,
+      "recall": 0.7828653295128941,
+      "recall_hard": null,
+      "batch_ms": 53.90625353902578,
+      "qps": 64742.024735096675
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 32,
+      "width": 1,
+      "recall": 0.8502005730659027,
+      "recall_hard": null,
+      "batch_ms": 105.17804510891438,
+      "qps": 33181.82988080851
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 64,
+      "width": 1,
+      "recall": 0.8998280802292263,
+      "recall_hard": null,
+      "batch_ms": 207.26558938622475,
+      "qps": 16838.299161645362
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 128,
+      "width": 1,
+      "recall": 0.9302865329512895,
+      "recall_hard": null,
+      "batch_ms": 410.7408672571182,
+      "qps": 8496.84138640947
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 256,
+      "width": 1,
+      "recall": 0.9467908309455588,
+      "recall_hard": null,
+      "batch_ms": 819.19698510319,
+      "qps": 4260.2695852944125
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 8,
+      "width": 4,
+      "recall": 0.7072206303724929,
+      "recall_hard": null,
+      "batch_ms": 105.76408077031374,
+      "qps": 32997.970337199644
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 16,
+      "width": 4,
+      "recall": 0.7977077363896848,
+      "recall_hard": null,
+      "batch_ms": 121.110575273633,
+      "qps": 28816.641256263672
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.871948424068768,
+      "recall_hard": null,
+      "batch_ms": 150.44315997511148,
+      "qps": 23198.130114904307
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9303724928366762,
+      "recall_hard": null,
+      "batch_ms": 210.35251952707767,
+      "qps": 16591.196567772742
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.968022922636103,
+      "recall_hard": null,
+      "batch_ms": 329.5303052291274,
+      "qps": 10590.83169171148
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9899140401146133,
+      "recall_hard": null,
+      "batch_ms": 568.1900018826127,
+      "qps": 6142.311530362038
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 8,
+      "width": 16,
+      "recall": 0.7072206303724929,
+      "recall_hard": null,
+      "batch_ms": 290.55606573820114,
+      "qps": 12011.451184586813
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 16,
+      "width": 16,
+      "recall": 0.7977077363896848,
+      "recall_hard": null,
+      "batch_ms": 318.87331418693066,
+      "qps": 10944.785420187542
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 32,
+      "width": 16,
+      "recall": 0.871948424068768,
+      "recall_hard": null,
+      "batch_ms": 366.23324267566204,
+      "qps": 9529.446247157746
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 64,
+      "width": 16,
+      "recall": 0.9303724928366762,
+      "recall_hard": null,
+      "batch_ms": 477.59957052767277,
+      "qps": 7307.376755268218
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 128,
+      "width": 16,
+      "recall": 0.968022922636103,
+      "recall_hard": null,
+      "batch_ms": 663.5794285684824,
+      "qps": 5259.355323188453
+    },
+    {
+      "algo": "ivf_pq",
+      "itopk": 256,
+      "width": 16,
+      "recall": 0.9899140401146133,
+      "recall_hard": null,
+      "batch_ms": 1070.4922247678041,
+      "qps": 3260.1824835831953
+    }
+  ]
+}

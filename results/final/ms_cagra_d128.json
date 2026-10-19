@@ -1,0 +1,87 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9292263610315187,
+      "recall_hard": null,
+      "batch_ms": 21.40096388757229,
+      "qps": 163076.76693135634
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9683954154727794,
+      "recall_hard": null,
+      "batch_ms": 39.91949278861284,
+      "qps": 87425.96050708172
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9864756446991405,
+      "recall_hard": null,
+      "batch_ms": 77.41602323949337,
+      "qps": 45081.10664898627
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9955014326647565,
+      "recall_hard": null,
+      "batch_ms": 151.33771300315857,
+      "qps": 23061.006610607103
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.997650429799427,
+      "recall_hard": null,
+      "batch_ms": 224.04775116592646,
+      "qps": 15577.03651046851
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9984813753581662,
+      "recall_hard": null,
+      "batch_ms": 293.5316255316138,
+      "qps": 11889.68988836987
+    }
+  ]
+}
