@@ -347,8 +347,9 @@ queue holds no unexpanded candidate, which is thorough and late -- the budget
 sweep at m=128 shows the tail is expensive (0.9770 at 2975 distances, 0.9854 at
 3843) and that budget, not queue width, is the real knob.
 
-**On a global distance cache.** It is already there, and measurement says there
-is nothing left for it to collect: with one shared state per query the visited
+**On a global distance cache** (superseded -- see the latency section below;
+this holds only for the single-CTA shared state). It is already there, and
+measurement says there is nothing left for it to collect: with one shared state per query the visited
 table makes every node's distance computed exactly once, so `dist_evals` equals
 the number of distinct nodes evaluated and no lineage ever recomputes another's
 work (17.9 distances per expansion against 28.1 for split branches). Caching
@@ -418,6 +419,51 @@ catalogs move in that direction and cost scanning time to do it -- P=16384 raise
 recall to 0.9883 from 0.9857 and spends 3.5ms of flat fp32 scan to get there,
 which a two-level catalog should mostly remove.
 
+## The regime the batch numbers hid: one query at a time
+
+Every number above this section was measured at Q=3490, where the GPU is already
+saturated and an extra branch costs its own work in wall time. A single query
+saturates nothing: one CTA per branch means E=100 branches occupy 100 of 188 SMs
+and run at the same time as one does. `bench/latency.py` measures that axis.
+
+| config | Q=1 | Q=8 | Q=64 | Q=256 | Q=1024 |
+|---|---|---|---|---|---|
+| shared state, S=8, m=128 | 1.71ms | 5.92 | 7.95 | 9.24 | **9.99** |
+| **split branches, E=100, m=16, B=16** | **0.63** | **0.89** | **2.91** | 9.17 | 34.0 |
+
+The crossover is near Q=256. Below it wide fan-out wins outright -- at Q=64 it is
+2.7x faster *and* more accurate (0.9953 against 0.9938). The design the batch
+benchmarks rejected is the right one for interactive latency, and the earlier
+conclusion that "multi-entry is dominated" holds only in the saturated regime
+those benchmarks measured.
+
+E is a clean knob there (Q=64, scattered entries): E=32/100/200/400 gives
+0.9828/0.9922/0.9953/0.9969 at 1.29/3.18/5.34/9.81 ms. Entry placement still
+barely matters -- at E=100 the nearest-100 reach 0.9953, maximally spread and
+random both 0.9922.
+
+### But CAGRA already does this, and does it better
+
+| Q=64, matched recall | ours | native CAGRA multi_cta |
+|---|---|---|
+| 0.9953 | 2.96ms | ~0.74ms |
+| 0.9969 | 9.81ms (E=400) | 0.79ms (itopk 256) |
+
+`multi_cta` *is* the many-CTAs-per-query mode, so the idea is right and the
+implementation is 4-12x behind. The cause is measurable and specific:
+
+| config (Q=64) | distance evals/query | distinct nodes touched | redundancy |
+|---|---|---|---|
+| E=100 split branches | 71,963 | 8,826 | **8.2x** |
+| shared state, S=8 | 4,234 | 4,234 | 1.0x |
+
+A hundred independent branches re-evaluate each other's nodes eight times over.
+Which makes the global distance cache -- a per-query visited/distance table
+shared by all of a query's CTAs, written with atomics -- not an optimisation but
+the thing that makes fan-out affordable. It was dismissed earlier in this README
+on the grounds that the shared single-CTA design had no redundancy left to
+collect; that was true of *that* design and is wrong for this one.
+
 ## Running it
 
 ```bash
@@ -450,24 +496,27 @@ call.
 
 ## Next
 
-1. **Close the 1.6x.** Two named causes with numbers on them: a third too many
+1. **A per-query visited table shared across CTAs.** Fan-out is the right shape
+   for interactive latency and ours wastes 8.2x on redundant distances. This is
+   the one change with a measured 8x behind it.
+2. **Close the 1.6x.** Two named causes with numbers on them: a third too many
    distance evaluations (an earlier stopping rule -- top-k unchanged for X
    expansions -- instead of exhausting the queue), and ~1.65 TB/s where the part
    gives 1.8 (occupancy: the fp32 query vector costs 4 KiB of shared memory per
    CTA and caps us near 6 CTAs/SM).
-2. **The difficulty pass.** Train queries (the lab's MS MARCO train pool, GT
+3. **The difficulty pass.** Train queries (the lab's MS MARCO train pool, GT
    recomputed on this subset), phi-hat_1 to find the pairs a degree-d builder
    leaves cut, and the manuscript's own repair -- reciprocal bridge, each
    endpoint drops its longest edge -- applied at build time instead of post hoc.
-3. **varphi_2 1.479 against CAGRA's 1.328.** LID closed part of it at no cost in
+4. **varphi_2 1.479 against CAGRA's 1.328.** LID closed part of it at no cost in
    edges; the query-aware pass is the rest.
-4. **A two-level entry catalog.** Density is the lever that works and P=16384
+5. **A two-level entry catalog.** Density is the lever that works and P=16384
    costs 3.5ms of flat scoring; a coarse-to-fine catalog should keep the density
    and drop most of the cost.
-5. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
+6. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
    the oracle says entries that reach them are in the pool. No query-independent
    rule finds them and neither does proximity or spread. B (probe then select) is
    the untried source of signal; so is raising the queue ceiling past m=128,
    which is currently where the recall curve ends.
-6. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
+7. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
    not where anything is lost.
