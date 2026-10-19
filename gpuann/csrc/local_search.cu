@@ -48,6 +48,16 @@ static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (ste
 // the queue to exhaustion. A negative stop_eps disables the rule entirely.
 #define NO_EARLY_STOP (-1.0f)
 
+// The bound is the best k-th distance any of this query's CTAs has reached. Every
+// branch tests its own frontier against it rather than against its own queue, so
+// a branch that landed somewhere the answer has already passed stops at once
+// instead of mining a region that cannot contribute. Distances are non-negative,
+// so their bit patterns order the same way as the floats and a plain integer
+// atomicMin is a float atomicMin.
+__device__ __forceinline__ void bound_min(float* bound, float v) {
+    atomicMin((int*)bound, __float_as_int(v));
+}
+
 static const int METRIC_IP = 0;   // distance = 1 - dot, for L2-normalised vectors
 static const int METRIC_L2 = 1;   // distance = ||q - x||^2
 
@@ -269,7 +279,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                                int D, int deg, int J, int m, int H,
                                int metric, int delta, int max_expansions,
                                int policy, int S, float stop_eps, int kstop,
-                               int* cache_id, float* cache_d, int Hc) {
+                               int* cache_id, float* cache_d, int Hc, float* bound) {
     const int j = blockIdx.x, q = blockIdx.y;
     const int tid = threadIdx.x;
     const int team = tid / TEAM, lane = tid % TEAM, nteams = BLOCK / TEAM;
@@ -310,8 +320,12 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         if (tid == 0) {
             s_slot = -1;
             const bool early = (stop_eps >= 0.f);
-            const float radius = (kstop > 0 && kstop <= m && s_id[kstop - 1] >= 0)
-                                 ? s_d[kstop - 1] : FLT_MAX;
+            float radius = (kstop > 0 && kstop <= m && s_id[kstop - 1] >= 0)
+                           ? s_d[kstop - 1] : FLT_MAX;
+            if (bound) {                      // what the whole query knows, not this branch
+                const float gb = ((volatile float*)bound)[q];
+                if (gb < radius) radius = gb;
+            }
             const float limit = (radius == FLT_MAX) ? FLT_MAX : radius * (1.f + stop_eps);
 
             if (policy == POLICY_ROUND_ROBIN && S > 1) {
@@ -421,6 +435,8 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         for (int i = tid; i < m; i += BLOCK) {
             s_id[i] = n_id[i]; s_d[i] = n_d[i]; s_e[i] = n_e[i]; s_l[i] = n_l[i];
         }
+        if (bound && tid == 0 && kstop > 0 && kstop <= m && n_id[kstop - 1] >= 0)
+            bound_min(bound + q, n_d[kstop - 1]);
         __syncthreads();
     }
 
@@ -494,7 +510,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
              torch::Tensor lin, torch::Tensor visited, torch::Tensor counters,
              int64_t metric, int64_t team_size, int64_t delta, int64_t max_expansions,
              int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop,
-             torch::Tensor cache_id, torch::Tensor cache_d) {
+             torch::Tensor cache_id, torch::Tensor cache_d, torch::Tensor bound) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     TORCH_CHECK(G.is_cuda() && G.scalar_type() == torch::kInt32 && G.is_contiguous(), "G: contiguous cuda int32");
@@ -519,7 +535,8 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
                   D, deg, J, m, H, (int)metric, (int)delta, (int)max_expansions,
                   (int)policy, (int)nlineage, (float)stop_eps, (int)kstop,
                   Hc ? cache_id.data_ptr<int>() : nullptr,
-                  Hc ? cache_d.data_ptr<float>() : nullptr, Hc);
+                  Hc ? cache_d.data_ptr<float>() : nullptr, Hc,
+                  bound.numel() ? bound.data_ptr<float>() : nullptr);
     C10_CUDA_CHECK(cudaGetLastError());
 }
 

@@ -96,6 +96,10 @@ class SearchState:
     # disable it. It changes what is computed, never what is returned.
     cache_id: torch.Tensor = None
     cache_d: torch.Tensor = None
+    # The query's best k-th distance so far, across all of its branches. Sharing
+    # it couples the CTAs, so results stop being reproducible bit for bit: which
+    # branch retires depends on which CTA got there first. Off by default.
+    bound: torch.Tensor = None
 
     @property
     def shape(self):
@@ -136,7 +140,8 @@ class SearchState:
                            self.max_expansions, self.metric, self.team_size,
                            self.n_seeds, self.policy, self.stop_eps, self.kstop,
                            None if self.cache_id is None else self.cache_id.clone(),
-                           None if self.cache_d is None else self.cache_d.clone())
+                           None if self.cache_d is None else self.cache_d.clone(),
+                           None if self.bound is None else self.bound.clone())
 
 
 def cache_size(J, max_expansions, deg, share=4.0, cap=1 << 20):
@@ -156,7 +161,8 @@ def cache_size(J, max_expansions, deg, share=4.0, cap=1 << 20):
 
 def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
                 metric=METRIC_IP, team_size=32, policy=POLICY_BEST,
-                stop_eps=-1.0, kstop=10, shared_cache=False) -> SearchState:
+                stop_eps=-1.0, kstop=10, shared_cache=False,
+                shared_bound=False) -> SearchState:
     """One state per (query, branch).
 
     `seeds` is int32 [Q, J] for one seed per branch, or [Q, J, S] for S seeds
@@ -194,6 +200,10 @@ def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
     else:
         st.cache_id = torch.empty((0, 0), dtype=torch.int32, device=dev)
         st.cache_d = torch.empty((0, 0), dtype=torch.float32, device=dev)
+    st.bound = (torch.full((Q,), torch.finfo(torch.float32).max,
+                           dtype=torch.float32, device=dev)
+                if (shared_bound and J > 1)
+                else torch.empty((0,), dtype=torch.float32, device=dev))
     ext().init_states(X, Qv, seeds, st.ids, st.dist, st.expanded, st.lineage,
                       st.visited, st.counters, metric, team_size)
     return st
@@ -207,7 +217,7 @@ def advance(X, G, Qv, state: SearchState, delta_expansions: int) -> SearchState:
                   int(delta_expansions), int(state.max_expansions),
                   int(state.policy), int(state.n_seeds),
                   float(state.stop_eps), int(state.kstop),
-                  state.cache_id, state.cache_d)
+                  state.cache_id, state.cache_d, state.bound)
     return state
 
 
@@ -246,11 +256,13 @@ def merge_branches(ids: torch.Tensor, dist: torch.Tensor, k: int):
 
 
 def search(X, G, Qv, seeds, k=10, m=16, budget=16, metric=METRIC_IP, team_size=32,
-           policy=POLICY_BEST, stop_eps=-1.0, shared_cache=False):
+           policy=POLICY_BEST, stop_eps=-1.0, shared_cache=False,
+           shared_bound=False):
     """init -> advance(budget) -> per-branch best-k -> merged top-k. One shot."""
     st = init_states(X, Qv, seeds, m=m, max_expansions=budget, deg=G.shape[1],
                      metric=metric, team_size=team_size, policy=policy,
-                     stop_eps=stop_eps, kstop=k, shared_cache=shared_cache)
+                     stop_eps=stop_eps, kstop=k, shared_cache=shared_cache,
+                     shared_bound=shared_bound)
     advance(X, G, Qv, st, budget)
     st.check()
     bi, bd = branch_topk(st, k)

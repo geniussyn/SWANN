@@ -508,6 +508,56 @@ candidate list. That is the difference between sharing *distances* and sharing
 *the search*, and it is the next change: a top-m list per query, in global
 memory, that every CTA of that query takes its next expansion from.
 
+## The shared bound: one number the whole query agrees on
+
+The distance cache stopped branches recomputing each other's arithmetic; it did
+not stop them *searching* places the answer had already passed. A branch tests
+its frontier against a radius, and with m=16 its own radius comes from sixteen
+slots and is far too loose to cut anything. So the radius becomes a property of
+the query rather than of the branch: one `bound[q]` holding the best k-th
+distance any of its CTAs has reached, updated by `atomicMin` on the bit pattern
+(distances are non-negative, so integer order is float order) and read by every
+branch when it decides whether to keep expanding.
+
+Measured at Q=64, E=100, m=16, fp16, recall 0.9953 throughout:
+
+| | p50 |
+|---|---|
+| plain | 3.05ms |
+| + shared distance cache | 2.54ms |
+| + retirement on the branch's *own* radius | 2.53ms |
+| **+ retirement on the shared bound** | **1.95ms** |
+
+The local radius is worth nothing and the shared one is worth 1.3x, which is the
+whole point: a branch cannot tell that it is wasting its time, and the query can.
+eps is the same travel slack as before -- 0.0 gives 0.9875 at 1.35ms, 0.1 gives
+0.9953 at 1.95ms.
+
+**It should not be reproducible and in practice it is.** Which branch retires
+depends on which CTA lowered the bound first, so the bitwise determinism the rest
+of the engine guarantees does not extend here; the flag is off by default for
+that reason. Across 8 runs the returned ids were identical and the recall
+standard deviation was 0.00000, because the branches the bound cuts are cut by a
+wide margin. That is an observation, not a guarantee.
+
+### Entries become nearly free, which was the point of fan-out
+
+At Q=1 the GPU is nowhere near full, and with useless branches dying immediately
+the cost of more entries almost vanishes (recall does not depend on Q -- queries
+are independent -- so it is the Q=64 figure):
+
+| E | recall@10 | p50 at Q=1 | p50 at Q=64 |
+|---|---|---|---|
+| 100 | 0.9953 | 0.48ms | 1.93ms |
+| 200 | 0.9969 | 0.50ms | 2.91ms |
+| 400 | 0.9984 | 0.52ms | 4.18ms |
+
+Four hundred entries cost 8% more than a hundred at Q=1 and buy 0.3 recall
+points. At Q=64 the SMs are full again and E costs what it weighs.
+
+Against native CAGRA `multi_cta` at Q=1: 0.9969 costs it 0.33ms and costs us
+0.50ms. The gap is now about 1.5x, from 4x before the cache and the bound.
+
 ## Running it
 
 ```bash
@@ -540,11 +590,12 @@ call.
 
 ## Next
 
-1. **A candidate list shared across a query's CTAs.** The distance cache is done
-   and took 86% of the redundant arithmetic with it; what remains is that 100
-   independent queues still explore 2.4x more nodes than one shared queue needs
-   for the same recall. Sharing the list, not just the distances, is what
-   multi_cta does and is the rest of the 3.4x.
+1. **A candidate list shared across a query's CTAs.** The cache shares distances
+   and the bound shares the stopping criterion; what is still unshared is the
+   list itself, and the remaining ~1.5x against multi_cta is most likely there.
+   A top-m list per query in global memory, with CTAs taking their next expansion
+   from it, is the shape. Note what it costs: reproducibility is already gone
+   with the bound, and a shared list makes that structural rather than incidental.
 2. **Close the 1.6x.** Two named causes with numbers on them: a third too many
    distance evaluations (an earlier stopping rule -- top-k unchanged for X
    expansions -- instead of exhausting the queue), and ~1.65 TB/s where the part

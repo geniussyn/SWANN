@@ -50,6 +50,10 @@ def main():
                     default=["shared:distance:8:128:512", "branch:distance:100:16:16"],
                     help="fanout:arm:E:m:B")
     ap.add_argument("--repeats", type=int, default=20)
+    ap.add_argument("--stop-eps", type=float, default=None,
+                    help="retirement slack; default 0.15 for shared, off for branch")
+    ap.add_argument("--bound", action="store_true",
+                    help="share the query's k-th best distance across its CTAs")
     ap.add_argument("--cache", action="store_true",
                     help="share one distance table per query across its branch CTAs")
     ap.add_argument("--half", action="store_true")
@@ -77,15 +81,17 @@ def main():
             seeds, _, _ = arms.seeds(arm, E)
             if fan == "shared":
                 seeds = seeds.unsqueeze(1)
-                policy, eps = engine.POLICY_ROUND_ROBIN, 0.15
+                policy = engine.POLICY_ROUND_ROBIN
+                eps = 0.15 if a.stop_eps is None else a.stop_eps
             else:
-                policy, eps = engine.POLICY_BEST, -1.0
+                policy = engine.POLICY_BEST
+                eps = -1.0 if a.stop_eps is None else a.stop_eps
             out = {}
 
             def run():
                 out["r"] = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=m, budget=B,
                                          team_size=16, policy=policy, stop_eps=eps,
-                                         shared_cache=a.cache)
+                                         shared_cache=a.cache, shared_bound=a.bound)
             p50, p95 = timed(run, a.repeats)
             ids = out["r"][0]
             rec = recall_at_k(ids.cpu().numpy(), gt[:nq])
