@@ -1,0 +1,11 @@
+msmarco-1m n=100000 graph=cagra_build  val q=1024  pool=farthest P=512 per-branch budget=64 m=64
+
+mean recall of one pool seed alone      0.9540
+best single seed in the pool (oracle 1) 0.9852
+whole pool, all 512 seeds             0.9993   <- ceiling of any selection
+
+  E  oracle recall@10  queries at 1.0
+  1            0.9852           0.900
+  2            0.9958           0.963
+
+wrote results/pools/oracle_farthest_B64m64.json

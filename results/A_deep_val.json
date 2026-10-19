@@ -1,0 +1,96 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "val",
+  "k": 10,
+  "m": 64,
+  "P": 512,
+  "pool": "metis",
+  "tau": 0.1,
+  "L": 32,
+  "n_near": 24,
+  "total_budget": 128,
+  "per_branch": 64,
+  "nq": 3490,
+  "rows": [
+    {
+      "arm": "single",
+      "E": 1,
+      "B": 64,
+      "m": 64,
+      "recall": 0.9602292263610316,
+      "dist_per_q": 2440.460205078125,
+      "select_ms": 0.2287680059671402,
+      "search_ms": 17.531302757561207,
+      "total_ms": 17.760070763528347,
+      "qps": 196508.22603516758
+    },
+    {
+      "arm": "sketch",
+      "E": 1,
+      "B": 64,
+      "m": 64,
+      "recall": 0.9598853868194842,
+      "dist_per_q": 2476.592529296875,
+      "select_ms": 1.2468479871749878,
+      "search_ms": 17.464670352637768,
+      "total_ms": 18.711518339812756,
+      "qps": 186516.13068589303,
+      "fallback_rate": 0.0
+    },
+    {
+      "arm": "distance",
+      "E": 2,
+      "B": 64,
+      "m": 64,
+      "recall": 0.963839541547278,
+      "dist_per_q": 4891.841796875,
+      "select_ms": 0.285504013299942,
+      "search_ms": 29.54045031219721,
+      "total_ms": 29.82595432549715,
+      "qps": 117012.18213884685
+    },
+    {
+      "arm": "random",
+      "E": 2,
+      "B": 64,
+      "m": 64,
+      "recall": 0.963868194842407,
+      "dist_per_q": 5062.43212890625,
+      "select_ms": 0.0,
+      "search_ms": 32.685683108866215,
+      "total_ms": 32.685683108866215,
+      "qps": 106774.5773700325
+    },
+    {
+      "arm": "sketch",
+      "E": 2,
+      "B": 64,
+      "m": 64,
+      "recall": 0.9645558739255015,
+      "dist_per_q": 4980.10400390625,
+      "select_ms": 1.0593600273132324,
+      "search_ms": 31.010267324745655,
+      "total_ms": 32.06962735205889,
+      "qps": 108825.71105946887,
+      "fallback_rate": 0.0
+    }
+  ]
+}

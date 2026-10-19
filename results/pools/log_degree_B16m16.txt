@@ -1,0 +1,13 @@
+msmarco-1m n=100000 graph=cagra_build  val q=1024  pool=degree P=512 per-branch budget=16 m=16
+
+mean recall of one pool seed alone      0.7637
+best single seed in the pool (oracle 1) 0.9159
+whole pool, all 512 seeds             0.9994   <- ceiling of any selection
+
+  E  oracle recall@10  queries at 1.0
+  1            0.9159           0.644
+  2            0.9770           0.861
+  4            0.9980           0.980
+  8            0.9994           0.994
+
+wrote results/pools/oracle_degree_B16m16.json

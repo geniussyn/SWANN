@@ -1,0 +1,13 @@
+msmarco-1m n=100000 graph=cagra_build  val q=1024  pool=kmeans P=512 per-branch budget=16 m=16
+
+mean recall of one pool seed alone      0.7635
+best single seed in the pool (oracle 1) 0.9170
+whole pool, all 512 seeds             0.9996   <- ceiling of any selection
+
+  E  oracle recall@10  queries at 1.0
+  1            0.9170           0.642
+  2            0.9786           0.867
+  4            0.9984           0.984
+  8            0.9996           0.996
+
+wrote results/pools/oracle_kmeans_B16m16.json

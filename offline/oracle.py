@@ -79,6 +79,7 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--m", type=int, default=16)
     ap.add_argument("--P", type=int, default=512)
+    ap.add_argument("--pool", default="random", help="entry placement, see offline/place_entries.py")
     ap.add_argument("--budget", type=int, default=16, help="per-branch expansions")
     ap.add_argument("--E", type=int, nargs="+", default=[1, 2, 4, 8, 16])
     ap.add_argument("--nq", type=int, default=0)
@@ -93,8 +94,8 @@ def main():
         Q, gt = Q[: a.nq], gt[: a.nq]
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
 
-    from bench.entry_arms import pool_ids
-    pool = pool_ids(X.shape[0], a.P)
+    from gpuann.pools import load_pool
+    pool = load_pool(a.data, a.pool, a.P)
 
     masks = seed_masks(Xg, Gg, Qg, pool, gt, a.k, a.m, a.budget, qchunk=a.qchunk)
     per_seed = np.array([bin(int(x)).count("1") for x in masks.ravel()]).reshape(masks.shape) / a.k
@@ -105,7 +106,7 @@ def main():
 
     oracle = dp_oracle(masks, a.k, a.E)
     print(f"{man['corpus']} n={man['n']} graph={man['graph']}  {a.split} q={Q.shape[0]}  "
-          f"P={a.P} per-branch budget={a.budget} m={a.m}\n")
+          f"pool={a.pool} P={len(pool)} per-branch budget={a.budget} m={a.m}\n")
     print(f"mean recall of one pool seed alone      {per_seed.mean():.4f}")
     print(f"best single seed in the pool (oracle 1) {oracle[1].mean() if 1 in oracle else float('nan'):.4f}")
     print(f"whole pool, all {a.P} seeds             {whole_pool.mean():.4f}   <- ceiling of any selection\n")
@@ -119,6 +120,7 @@ def main():
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
         a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m, P=a.P,
+                                         pool=a.pool,
                                          branch_budget=a.budget, nq=int(Q.shape[0]),
                                          mean_single_seed=float(per_seed.mean()),
                                          whole_pool=float(whole_pool.mean()),

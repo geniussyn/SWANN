@@ -1,14 +1,20 @@
-"""Stage 1 integration run: the engine on real vectors, under the baseline arms.
+"""Entry-selection arms on one graph, one corpus, one budget.
 
-Three entry policies that need no new research -- one seed, E random seeds, the
-E pool seeds nearest the query -- measured against the same graph, the same
-vectors, the same exact distance and the same *total* expansion budget. These
-are the arms A and B have to beat, and running them now is what turns the engine
-from "it compiles" into "it searches".
+Arms differ in which entries a query starts from and in nothing else: same
+vectors, same graph, same exact distance, same per-branch budget, same candidate
+pool, and -- for every arm that uses one -- the same candidate generator. The
+cost of choosing is charged to the arm that pays it: catalog scoring and the
+greedy are timed and reported next to the search, because an entry policy that
+is free only in the search kernel is not free.
 
-What is deliberately not here: any recall claim about CAGRA (the graph is an
-exact kNN stand-in), and any tuned constant (nothing is fitted, and the default
-query split is the validation half).
+  single/distance  the E pool entries nearest the query (E=1 is the single-seed
+                   baseline). Cheap, and the arm A and B have to beat.
+  random           E uniform pool entries. Isolates "more starting points" from
+                   "better starting points".
+  sketch           A: weighted region coverage over static reach masks.
+
+The row that actually matters is none of these: it is E=1 with the queue widened
+to spend the same budget. --E 1 --m 64 is that row.
 """
 import argparse, json, time
 from pathlib import Path
@@ -18,35 +24,61 @@ import torch
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from gpuann import engine                                            # noqa: E402
+from gpuann import engine, select_a                                 # noqa: E402
+from gpuann.pools import load_pool                                  # noqa: E402
 
 
 def recall_at_k(got, gt):
-    """Fraction of each query's exact top-k that the search returned."""
     k = gt.shape[1]
-    return np.mean([len(set(g[g >= 0].tolist()) & set(t.tolist())) / k
-                    for g, t in zip(got, gt)])
+    return float(np.mean([len(set(g[g >= 0].tolist()) & set(t.tolist())) / k
+                          for g, t in zip(got, gt)]))
 
 
 def pool_ids(n, P, seed=0):
-    """Offline candidate pool. Fixed random nodes: no GT, no query ever sees it."""
+    """Kept for continuity: identical to the 'random' placement."""
     return np.sort(np.random.default_rng(seed).choice(n, size=P, replace=False)).astype(np.int32)
 
 
-def seeds_for(arm, Qg, Xg, pool, E, rng, k_near=None):
-    """(seeds[Q,E], pool-scoring time in ms). Scoring the pool is a real cost and
-    is charged to the arms that do it."""
-    Qn = Qg.shape[0]
-    if arm == "random":
-        idx = torch.from_numpy(rng.integers(0, len(pool), (Qn, E)).astype(np.int64))
-        return torch.from_numpy(pool)[idx], 0.0
-    t0 = torch.cuda.Event(True); t1 = torch.cuda.Event(True)
-    t0.record()
-    pv = Xg[torch.from_numpy(pool).long().to(Xg.device)]
-    sim = Qg @ pv.T                                   # [Q, P]
-    near = torch.topk(sim, max(E, k_near or E), dim=1).indices[:, :E]
-    t1.record(); torch.cuda.synchronize()
-    return torch.from_numpy(pool).to(Xg.device)[near].cpu(), t0.elapsed_time(t1)
+class Arms:
+    """Holds whatever the arms need, so selection can be timed on its own."""
+
+    def __init__(self, Xg, Qg, pool, data, pool_name, R, tau, L, n_near, rng_seed=1234):
+        self.Xg, self.Qg = Xg, Qg
+        self.pool_t = torch.from_numpy(pool).to(Xg.device)
+        self.P = len(pool)
+        self.rng = np.random.default_rng(rng_seed)
+        self.tau, self.L, self.n_near, self.rng_seed = tau, L, n_near, rng_seed
+        self.maskd = self.reps_t = None
+        mpath = Path(data) / "pools" / f"mask_{pool_name}_fwd.npy"
+        rpath = Path(data) / "pools" / f"reps_{pool_name}.npy"
+        if mpath.exists() and rpath.exists():
+            self.maskd = torch.from_numpy(select_a.unpack_mask(np.load(mpath), R)).to(Xg.device)
+            self.reps_t = torch.from_numpy(np.load(rpath)).to(Xg.device)
+
+    def supports(self, arm):
+        return arm != "sketch" or self.maskd is not None
+
+    def seeds(self, arm, E):
+        """(seeds[Q,E] int32 on cpu, selection ms, extra info)."""
+        if arm == "random":
+            idx = torch.from_numpy(self.rng.integers(0, self.P, (self.Qg.shape[0], E)).astype(np.int64))
+            return self.pool_t.cpu()[idx], 0.0, {}
+        t0, t1 = torch.cuda.Event(True), torch.cuda.Event(True)
+        torch.cuda.synchronize(); t0.record()
+        if arm in ("distance", "single"):
+            cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t)
+            near = torch.topk(cat, E, dim=1, largest=False).indices
+            seeds = self.pool_t[near]
+            info = {}
+        elif arm == "sketch":
+            seeds, fb = select_a.select(self.Qg, self.Xg, self.pool_t, self.reps_t, self.maskd,
+                                        E, self.tau, L=self.L, n_near=self.n_near,
+                                        rng_seed=self.rng_seed)
+            info = {"fallback_rate": round(fb, 4)}
+        else:
+            raise ValueError(arm)
+        t1.record(); torch.cuda.synchronize()
+        return seeds.to(torch.int32).cpu(), t0.elapsed_time(t1), info
 
 
 def main():
@@ -56,11 +88,17 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--m", type=int, default=16)
     ap.add_argument("--P", type=int, default=512)
-    ap.add_argument("--total-budget", type=int, default=128,
-                    help="node expansions per query, split evenly across branches")
+    ap.add_argument("--R", type=int, default=128)
+    ap.add_argument("--pool", default="random")
+    ap.add_argument("--tau", type=float, default=0.05)
+    ap.add_argument("--L", type=int, default=32)
+    ap.add_argument("--n-near", type=int, default=24)
+    ap.add_argument("--total-budget", type=int, default=128)
+    ap.add_argument("--per-branch", type=int, default=0, help="0 = total-budget // E")
     ap.add_argument("--E", type=int, nargs="+", default=[1, 2, 4, 8, 16])
+    ap.add_argument("--arms", nargs="+", default=["distance", "random", "sketch"])
     ap.add_argument("--team", type=int, default=32)
-    ap.add_argument("--nq", type=int, default=0, help="0 = all")
+    ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
@@ -71,45 +109,50 @@ def main():
     if a.nq:
         Q, gt = Q[: a.nq], gt[: a.nq]
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
-    pool = pool_ids(X.shape[0], a.P)
-    # Warm the context up before anything is timed: the first matmul on a fresh
-    # context pays for module load, and that cost is not pool scoring.
-    seeds_for("distance", Qg[:8], Xg, pool, 2, np.random.default_rng(0))
-    print(f"{man['corpus']} n={man['n']} d={man['d']} deg={man['deg']} graph={man['graph']}  "
-          f"{a.split} queries={Q.shape[0]}  budget={a.total_budget} expansions/query\n")
+    pool = load_pool(a.data, a.pool, a.P)
+    arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near)
+    for w in a.arms:                                              # warm every arm it will time
+        if arms.supports(w) and w != "random":
+            arms.seeds(w, max(a.E))
 
+    print(f"{man['corpus']} n={man['n']} graph={man['graph']}  {a.split} q={Q.shape[0]}  "
+          f"m={a.m} pool={a.pool}(P={len(pool)}) tau={a.tau}\n")
+    print(f"{'arm':9s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
+          f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}")
     rows = []
-    print(f"{'arm':10s} {'E':>3s} {'B/branch':>8s} {'recall@10':>10s} {'dist/q':>9s} "
-          f"{'exp/q':>6s} {'ms(batch)':>10s} {'QPS':>9s} {'sel ms':>7s}")
     for E in a.E:
-        B = max(1, a.total_budget // E)
-        for arm in ("random", "distance"):
+        B = a.per_branch or max(1, a.total_budget // E)
+        for arm in a.arms:
+            if not arms.supports(arm):
+                continue
             if E == 1 and arm == "random":
-                continue                                   # single-seed baseline is "distance" at E=1
-            rng = np.random.default_rng(1234)
-            seeds, sel_ms = seeds_for(arm, Qg, Xg, pool, E, rng)
+                continue
+            seeds, sel_ms, info = arms.seeds(arm, E)
             best = None
             for r in range(a.repeats + 1):
                 torch.cuda.synchronize(); t = time.perf_counter()
                 ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, m=a.m,
                                               budget=B, team_size=a.team)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
-                if r:                                      # first pass is warm-up
+                if r:
                     best = ms if best is None else min(best, ms)
             st.check()
             rec = recall_at_k(ids.cpu().numpy(), gt)
             de = float(st.dist_evals.sum(1).float().mean())
-            ex = float(st.expansions.sum(1).float().mean())
-            name = "single" if E == 1 else arm
-            rows.append(dict(arm=name, E=E, B=B, recall=rec, dist_per_q=de, exp_per_q=ex,
-                             batch_ms=best, qps=Q.shape[0] / (best / 1e3), select_ms=sel_ms))
-            print(f"{name:10s} {E:3d} {B:8d} {rec:10.4f} {de:9.1f} {ex:6.1f} "
-                  f"{best:10.2f} {Q.shape[0]/(best/1e3):9.0f} {sel_ms:7.2f}")
+            tot = best + sel_ms
+            name = "single" if (E == 1 and arm == "distance") else arm
+            rows.append(dict(arm=name, E=E, B=B, m=a.m, recall=rec, dist_per_q=de,
+                             select_ms=sel_ms, search_ms=best, total_ms=tot,
+                             qps=Q.shape[0] / (tot / 1e3), **info))
+            print(f"{name:9s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
+                  f"{best:10.2f} {tot:9.2f} {Q.shape[0]/(tot/1e3):8.0f}"
+                  + (f"  fallback {info['fallback_rate']:.2f}" if info else ""))
 
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
-        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m,
-                                         P=a.P, total_budget=a.total_budget,
+        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m, P=a.P,
+                                         pool=a.pool, tau=a.tau, L=a.L, n_near=a.n_near,
+                                         total_budget=a.total_budget, per_branch=a.per_branch,
                                          nq=int(Q.shape[0]), rows=rows), indent=2))
         print(f"\nwrote {a.out}")
 

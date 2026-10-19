@@ -127,6 +127,63 @@ That sharpens what A and B have to show: **the case for multi-entry is at recall
 multi-branch cost structure (shared visited, or fewer and deeper branches) to
 survive its own overhead.
 
+## A (reach sketch): built, measured, and falsified on this corpus
+
+A is implemented end to end -- METIS k-way regions, representatives, the forward
+reach sketch, query-weighted greedy coverage -- and `offline/place_entries.py`
+adds four more placements so the pool itself could be compared rather than
+assumed.
+
+**Placement does not matter.** Five placements of P=512 entries, with 1-4 ids in
+common between them, give the same ceiling at every E (oracle, 1024 val queries):
+
+| placement | 1 seed alone | E=1 | E=2 | E=4 | E=8 |
+|---|---|---|---|---|---|
+| random | 0.7634 | 0.9167 | 0.9791 | 0.9982 | 0.9994 |
+| metis | 0.7635 | 0.9166 | 0.9778 | 0.9981 | 0.9992 |
+| kmeans | 0.7635 | 0.9170 | 0.9786 | 0.9984 | 0.9996 |
+| farthest | 0.7694 | 0.9159 | 0.9782 | 0.9981 | 0.9993 |
+| degree (hubs) | 0.7637 | 0.9159 | 0.9770 | 0.9980 | 0.9994 |
+
+Graph regions, geometric regions, maximal spread and pure hubs are
+indistinguishable to four decimals. Where the entries sit is not a lever on this
+graph; which of them a query picks still is.
+
+**The sketch maximises its own objective and does not move recall.** Full val,
+3490 queries, tau tuned on val (and nearly flat from 0.005 to 1.0):
+
+| structure | arm | recall@10 | select ms | total ms |
+|---|---|---|---|---|
+| E=1, m=64, B=64 | — | 0.9602 | 0.23 | **17.76** |
+| E=2, m=64, B=64 | distance | 0.9638 | 0.29 | 29.83 |
+| E=2, m=64, B=64 | **sketch (A)** | 0.9646 | 1.06 | 32.07 |
+| E=8, m=16, B=16 | distance | 0.9368 | 0.25 | 26.98 |
+| E=8, m=16, B=16 | **sketch (A)** | 0.9401 | 2.36 | 32.84 |
+
+A beats nearest-by-distance by 0.0008 (E=2) to 0.0033 (E=8) recall, and pays
+1-2.4ms of selection plus a little more search for it. Every row is dominated by
+E=1 with a wider queue.
+
+The design document fixes how to read that: *"proxy F만 좋아지면 영역 또는 도달
+모델이 실제 검색과 맞지 않는 것이다."* F was measured directly:
+
+| | F(distance) | F(sketch) | max possible |
+|---|---|---|---|
+| E=2 | 16.21 | 22.40 (+38%) | 30.15 |
+| E=8 | 25.88 | 30.00 (+16%) | 30.15 |
+
+The greedy does its job -- at E=8 it covers 99.5% of all available region weight
+-- and recall does not follow. The surrogate is mis-specified, not
+under-optimised: **static reach information does not predict which entries
+recover a query's missing top-10 on this graph.** No tuning of tau, of the pool,
+or of the region count addresses that, and none of them was close to binding.
+
+What survives: the oracle gap is unchanged and large (0.9961 available at
+E=2/B=64 against 0.9646 reached), so the information needed to choose entries
+exists -- it simply is not in any query-independent description of where the
+entries are. That is precisely B's hypothesis, and it is now the only one of the
+three with evidence pointing at it.
+
 ## Running it
 
 ```bash
@@ -159,11 +216,15 @@ call.
 
 ## Next
 
-1. A (reach sketch): METIS k-way on the symmetrised graph, representatives,
-   reach masks, fused greedy. It has to be judged at recall >= 0.98 against the
-   E=1 wide-queue row, not against E=1 at m=16.
-2. B (probe then select): resume already works and is tested; what is missing is
-   frontier scores, survivor selection and the merge that keeps losing probes.
-3. The multi-branch cost structure itself: shared visited across branches is
-   listed in the document as a later optimisation, and the measurement above
-   says it is on the critical path, not an optimisation.
+1. **B (probe then select).** The only remaining hypothesis with evidence behind
+   it: static information is now measured to carry no usable signal, while the
+   per-query headroom is 3 recall points at E=2. Resume already works and is
+   tested; frontier scores, survivor selection and the losing-probe merge are
+   what is missing.
+2. **The multi-branch cost structure.** Every multi-entry row still pays 1.5-1.9x
+   the time of the wide-queue row. Shared visited across branches is listed in
+   the document as a later optimisation; the measurements say it is on the
+   critical path. B cannot win on the Pareto until this is addressed, however
+   good its selection is.
+3. C (fused greedy) is on hold. It makes selection cheaper, and selection is not
+   currently where anything is lost.
