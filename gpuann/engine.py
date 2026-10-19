@@ -89,6 +89,8 @@ class SearchState:
     team_size: int
     n_seeds: int = 1         # seeds per branch; lineage ids run 0..n_seeds-1
     policy: int = POLICY_BEST
+    stop_eps: float = -1.0   # < 0 disables early stopping (run the queue out)
+    kstop: int = 10          # the k whose current best distance sets the radius
 
     @property
     def shape(self):
@@ -123,11 +125,12 @@ class SearchState:
         return SearchState(self.ids.clone(), self.dist.clone(), self.expanded.clone(),
                            self.lineage.clone(), self.visited.clone(), self.counters.clone(),
                            self.max_expansions, self.metric, self.team_size,
-                           self.n_seeds, self.policy)
+                           self.n_seeds, self.policy, self.stop_eps, self.kstop)
 
 
 def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
-                metric=METRIC_IP, team_size=32, policy=POLICY_BEST) -> SearchState:
+                metric=METRIC_IP, team_size=32, policy=POLICY_BEST,
+                stop_eps=-1.0, kstop=10) -> SearchState:
     """One state per (query, branch).
 
     `seeds` is int32 [Q, J] for one seed per branch, or [Q, J, S] for S seeds
@@ -153,7 +156,7 @@ def init_states(X, Qv, seeds, m=16, max_expansions=16, deg=None,
         visited=torch.zeros((Q, J, H), dtype=torch.int32, device=dev),
         counters=torch.zeros((Q, J, NCTR), dtype=torch.int32, device=dev),
         max_expansions=max_expansions, metric=metric, team_size=team_size,
-        n_seeds=S, policy=policy,
+        n_seeds=S, policy=policy, stop_eps=float(stop_eps), kstop=int(kstop),
     )
     ext().init_states(X, Qv, seeds, st.ids, st.dist, st.expanded, st.lineage,
                       st.visited, st.counters, metric, team_size)
@@ -166,7 +169,8 @@ def advance(X, G, Qv, state: SearchState, delta_expansions: int) -> SearchState:
     ext().advance(X, G, Qv, state.ids, state.dist, state.expanded, state.lineage,
                   state.visited, state.counters, state.metric, state.team_size,
                   int(delta_expansions), int(state.max_expansions),
-                  int(state.policy), int(state.n_seeds))
+                  int(state.policy), int(state.n_seeds),
+                  float(state.stop_eps), int(state.kstop))
     return state
 
 
@@ -205,10 +209,11 @@ def merge_branches(ids: torch.Tensor, dist: torch.Tensor, k: int):
 
 
 def search(X, G, Qv, seeds, k=10, m=16, budget=16, metric=METRIC_IP, team_size=32,
-           policy=POLICY_BEST):
+           policy=POLICY_BEST, stop_eps=-1.0):
     """init -> advance(budget) -> per-branch best-k -> merged top-k. One shot."""
     st = init_states(X, Qv, seeds, m=m, max_expansions=budget, deg=G.shape[1],
-                     metric=metric, team_size=team_size, policy=policy)
+                     metric=metric, team_size=team_size, policy=policy,
+                     stop_eps=stop_eps, kstop=k)
     advance(X, G, Qv, st, budget)
     st.check()
     bi, bd = branch_topk(st, k)

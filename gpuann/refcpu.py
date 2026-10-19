@@ -56,7 +56,7 @@ POLICY_BEST, POLICY_ROUND_ROBIN = 0, 1
 
 
 def init_state(X, q, seeds, m=16, max_expansions=16, metric=METRIC_IP, team=32,
-               policy=POLICY_BEST):
+               policy=POLICY_BEST, stop_eps=-1.0, kstop=10):
     """One branch seeded with one or several entries. Mirrors init_states.
 
     Entries are (id, distance, expanded, lineage); lineage is the index of the
@@ -75,6 +75,7 @@ def init_state(X, q, seeds, m=16, max_expansions=16, metric=METRIC_IP, team=32,
     cand.sort(key=_key)
     return {"queue": cand[:m], "visited": set(seen), "m": m, "metric": metric, "team": team,
             "max_expansions": max_expansions, "n_seeds": max(1, len(seeds)), "policy": policy,
+            "stop_eps": stop_eps, "kstop": kstop,
             "counters": {"expansions": 0, "dist_evals": len(cand), "exhausted": 0}}
 
 
@@ -84,17 +85,36 @@ def advance(X, G, q, state, delta_expansions):
     X = np.asarray(X, dtype=np.float32); q = np.asarray(q, dtype=np.float32)
     m, metric, team = state["m"], state["metric"], state["team"]
     S, policy = state.get("n_seeds", 1), state.get("policy", POLICY_BEST)
+    eps, kstop = state.get("stop_eps", -1.0), state.get("kstop", 10)
+    early = eps >= 0.0
     queue, visited, ctr = state["queue"], state["visited"], state["counters"]
+    retired = set()                      # re-derived per call, as the kernel does
 
     for _ in range(delta_expansions):
         if ctr["expansions"] >= state["max_expansions"]:
             break
+        radius = queue[kstop - 1][1] if (0 < kstop <= len(queue)) else float("inf")
+        limit = radius * (1.0 + eps) if radius != float("inf") else float("inf")
         slot = None
         if policy == POLICY_ROUND_ROBIN and S > 1:
-            want = ctr["expansions"] % S
-            slot = next((i for i, e in enumerate(queue) if not e[2] and e[3] == want), None)
-        if slot is None:
-            slot = next((i for i, e in enumerate(queue) if not e[2]), None)
+            for turn in range(S):
+                want = (ctr["expansions"] + turn) % S
+                if want in retired:
+                    continue
+                found = next((i for i, e in enumerate(queue)
+                              if not e[2] and e[3] == want), None)
+                if found is None:
+                    retired.add(want); continue
+                if early and queue[found][1] > limit:
+                    retired.add(want); continue
+                slot = found
+                break
+            if slot is None and not early:
+                slot = next((i for i, e in enumerate(queue) if not e[2]), None)
+        else:
+            found = next((i for i, e in enumerate(queue) if not e[2]), None)
+            if found is not None and (not early or queue[found][1] <= limit):
+                slot = found
         if slot is None:
             ctr["exhausted"] = 1
             break
@@ -123,10 +143,11 @@ def advance(X, G, q, state, delta_expansions):
     return state
 
 
-def run(X, G, q, seeds, m=16, budget=16, metric=METRIC_IP, team=32, policy=POLICY_BEST):
+def run(X, G, q, seeds, m=16, budget=16, metric=METRIC_IP, team=32, policy=POLICY_BEST,
+        stop_eps=-1.0, kstop=10):
     """init + one full-budget advance, the single-shot path."""
     st = init_state(X, q, seeds, m=m, max_expansions=budget, metric=metric, team=team,
-                    policy=policy)
+                    policy=policy, stop_eps=stop_eps, kstop=kstop)
     return advance(X, G, q, st, budget)
 
 

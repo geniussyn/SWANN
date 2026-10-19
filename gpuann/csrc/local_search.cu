@@ -37,6 +37,15 @@
 static const int POLICY_BEST = 0;          // always the nearest unexpanded candidate
 static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (step % S)
 
+// Stopping. A lineage is retired when its own best unexpanded candidate lies
+// beyond (1 + stop_eps) times the current k-th best distance: nothing it can
+// still reach will beat the answer, so its turns are waste. The slack is what
+// keeps a lineage that is *travelling* -- crossing worse ground on its way to a
+// fragment it has not reached yet -- from being retired on arrival's doorstep,
+// and measurement is what sets it: at eps=0.25 the recall is the same as running
+// the queue to exhaustion. A negative stop_eps disables the rule entirely.
+#define NO_EARLY_STOP (-1.0f)
+
 static const int METRIC_IP = 0;   // distance = 1 - dot, for L2-normalised vectors
 static const int METRIC_L2 = 1;   // distance = ||q - x||^2
 
@@ -222,7 +231,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                                unsigned char* lin, int* visited, int* counters,
                                int D, int deg, int J, int m, int H,
                                int metric, int delta, int max_expansions,
-                               int policy, int S) {
+                               int policy, int S, float stop_eps, int kstop) {
     const int j = blockIdx.x, q = blockIdx.y;
     const int tid = threadIdx.x;
     const int team = tid / TEAM, lane = tid % TEAM, nteams = BLOCK / TEAM;
@@ -236,6 +245,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     __shared__ int   c_id[MAXDEG]; __shared__ float c_d[MAXDEG];
     __shared__ unsigned char c_l[MAXDEG];
     __shared__ int   s_slot, s_p, s_plin;
+    __shared__ unsigned s_retired;
 
     const size_t bid = (size_t)q * J + j;
     int*  vis = visited  + bid * H;
@@ -249,23 +259,45 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     for (int i = tid; i < m; i += BLOCK) {
         s_id[i] = qid[i]; s_d[i] = qd[i]; s_e[i] = qe[i]; s_l[i] = ql[i];
     }
+    // Retirement is re-derived every call rather than stored: it is a function
+    // of the state, it is monotone, and a re-check costs no expansion.
+    if (tid == 0) s_retired = 0u;
     __syncthreads();
 
     for (int step = 0; step < delta; ++step) {
         if (ctr[0] >= max_expansions) break;          // uniform: ctr[0] only moves in tid 0
         if (tid == 0) {
             s_slot = -1;
+            const bool early = (stop_eps >= 0.f);
+            const float radius = (kstop > 0 && kstop <= m && s_id[kstop - 1] >= 0)
+                                 ? s_d[kstop - 1] : FLT_MAX;
+            const float limit = (radius == FLT_MAX) ? FLT_MAX : radius * (1.f + stop_eps);
+
             if (policy == POLICY_ROUND_ROBIN && S > 1) {
                 // Each lineage gets its turn, so the nearest seed's basin cannot
-                // starve the others. A lineage with nothing left to expand simply
-                // yields its turn to the global best.
-                const int want = ctr[0] % S;
+                // starve the others -- and a lineage that is done, or that can no
+                // longer reach anything good, gives its turns back instead of
+                // spending them.
+                for (int turn = 0; turn < S && s_slot < 0; ++turn) {
+                    const int want = (ctr[0] + turn) % S;
+                    if (s_retired & (1u << want)) continue;
+                    int found = -1;
+                    for (int i = 0; i < m; ++i)
+                        if (s_id[i] >= 0 && s_e[i] == 0 && s_l[i] == want) { found = i; break; }
+                    if (found < 0) { s_retired |= (1u << want); continue; }
+                    if (early && s_d[found] > limit) { s_retired |= (1u << want); continue; }
+                    s_slot = found;
+                }
+                if (s_slot < 0 && !early) {          // legacy fallback: global best
+                    for (int i = 0; i < m; ++i)
+                        if (s_id[i] >= 0 && s_e[i] == 0) { s_slot = i; break; }
+                }
+            } else {
                 for (int i = 0; i < m; ++i)
-                    if (s_id[i] >= 0 && s_e[i] == 0 && s_l[i] == want) { s_slot = i; break; }
-            }
-            if (s_slot < 0) {
-                for (int i = 0; i < m; ++i)
-                    if (s_id[i] >= 0 && s_e[i] == 0) { s_slot = i; break; }
+                    if (s_id[i] >= 0 && s_e[i] == 0) {
+                        if (!early || s_d[i] <= limit) s_slot = i;
+                        break;
+                    }
             }
             if (s_slot >= 0) {
                 s_e[s_slot] = 1; s_p = s_id[s_slot]; s_plin = s_l[s_slot]; ctr[0] += 1;
@@ -403,7 +435,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
              torch::Tensor ids, torch::Tensor dist, torch::Tensor expd,
              torch::Tensor lin, torch::Tensor visited, torch::Tensor counters,
              int64_t metric, int64_t team_size, int64_t delta, int64_t max_expansions,
-             int64_t policy, int64_t nlineage) {
+             int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     TORCH_CHECK(G.is_cuda() && G.scalar_type() == torch::kInt32 && G.is_contiguous(), "G: contiguous cuda int32");
@@ -419,7 +451,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
                   D, deg, J, m, H, (int)metric, (int)delta, (int)max_expansions,
-                  (int)policy, (int)nlineage);
+                  (int)policy, (int)nlineage, (float)stop_eps, (int)kstop);
     C10_CUDA_CHECK(cudaGetLastError());
 }
 

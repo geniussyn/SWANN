@@ -355,6 +355,69 @@ work (17.9 distances per expansion against 28.1 for split branches). Caching
 *values* rather than ids would only matter if branches were independent again,
 and the measurements say they should not be.
 
+## Stopping: retire a lineage when nothing it can reach will beat the answer
+
+The rule was chosen by replaying searches one expansion at a time
+(`bench/stopping.py`) and recording, per step, whether a ground-truth document
+arrived and whether it was the *first of its fragment*. That distinction decides
+everything, because it says what the tail is doing:
+
+| expansions | new gt documents | first of a fragment |
+|---|---|---|
+| 1-96 | 9976 | 14% |
+| 97-256 | 104 | **47%** |
+
+The tail is arrival, not mining. A rule that stops on "no improvement" cuts
+exactly the documents that were hardest to get. But at expansion 97 only 3 of
+1024 queries still moved, while the current rule runs *every* query to ~131
+expansions (median 130, p95 138) -- no per-query adaptivity at all. That is the
+waste worth taking.
+
+Rules, simulated on the recorded traces:
+
+| rule | recall@10 | mean expansions |
+|---|---|---|
+| exhaust the queue (old) | 0.9844 | 131.4 |
+| top-k idle for 64 expansions | 0.9796 | 97.5 |
+| **all lineages beyond radius x 1.1** | **0.9824** | **99.3** |
+| all lineages beyond radius x 1.25 | 0.9844 | 130.4 |
+| oracle: stop at the last useful expansion | 0.9844 | 36.1 |
+
+The radius rule dominates the idle rule on both axes, so that is the one, applied
+**per lineage rather than globally**: a lineage retires when its own best
+unexpanded candidate lies beyond `(1 + eps)` times the current k-th best
+distance, and the search stops when all have retired. Retiring individually
+matters because round-robin otherwise keeps handing turns to lineages that are
+finished. It is free to evaluate -- the queue is sorted, so a lineage's best
+unexpanded candidate is the first one the turn-scan already finds -- and the
+reference implements it too, so the tests still assert bitwise agreement (11/11).
+
+`eps` is the travel allowance, and it is measured rather than guessed
+(m=128, S=4, fp16):
+
+| eps | recall@10 | distances/query | total ms |
+|---|---|---|---|
+| off (exhaust) | 0.9854 | 3855 | 20.64 |
+| 0.25 | 0.9854 | 3791 | 20.65 |
+| **0.15** | **0.9851** | **3422** | **19.97** |
+| 0.10 | 0.9803 | 2538 | 16.43 |
+| 0.05 | 0.9384 | 1185 | 11.09 |
+
+**What it does not do.** eps=0.10 removes 34% of the distance work, but at the
+recall it lands on, simply running a narrower queue to exhaustion costs the same
+(m=96 reaches 0.9800 in 16.87ms against 0.9803 in 16.43ms). The rule is worth
+having -- eps=0.15 is 11% fewer distances for 0.0003 recall, and it is free --
+but it does not move the Pareto, and the measurement says why: the tail is
+travel, travel needs slack, and slack is what stops the rule from firing.
+
+The oracle spends 36 expansions where we spend 131, and no radius or idle rule
+comes near it. That gap is not a stopping problem. It is an arrival problem: a
+search that started *inside* the far fragment would not need to travel to it, and
+the entry oracle (0.9996 at E=8) says such entries are in the pool. Denser
+catalogs move in that direction and cost scanning time to do it -- P=16384 raises
+recall to 0.9883 from 0.9857 and spends 3.5ms of flat fp32 scan to get there,
+which a two-level catalog should mostly remove.
+
 ## Running it
 
 ```bash

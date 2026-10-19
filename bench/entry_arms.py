@@ -104,6 +104,9 @@ def main():
     ap.add_argument("--fanout", default="branch", choices=["branch", "shared"],
                     help="branch: E independent states. shared: E seeds in one state, "
                          "sharing its queue, visited table and budget.")
+    ap.add_argument("--stop-eps", type=float, default=-1.0,
+                    help="retire a lineage once its frontier is beyond (1+eps) x "
+                         "the current k-th best distance; <0 runs the queue out")
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
@@ -153,7 +156,8 @@ def main():
             for r in range(a.repeats + 1):
                 torch.cuda.synchronize(); t = time.perf_counter()
                 ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
-                                              budget=B, team_size=a.team, policy=policy)
+                                              budget=B, team_size=a.team, policy=policy,
+                                              stop_eps=a.stop_eps)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
                     best = ms if best is None else min(best, ms)
@@ -165,6 +169,7 @@ def main():
             if a.fanout == "shared" and E > 1:
                 name = f"{name}/{a.policy}"
             rows.append(dict(arm=name, E=E, B=B, m=a.m, fanout=a.fanout, policy=a.policy,
+                             stop_eps=a.stop_eps, expansions=float(st.expansions.sum(1).float().mean()),
                              recall=rec, dist_per_q=de,
                              select_ms=sel_ms, search_ms=best, total_ms=tot,
                              qps=Q.shape[0] / (tot / 1e3), **info))

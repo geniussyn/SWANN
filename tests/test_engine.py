@@ -258,6 +258,34 @@ def test_multiseed_matches_cpu():
     return "multi-seed branch matches CPU under both policies"
 
 
+def test_early_stop_matches_cpu():
+    """Per-lineage retirement: same queue as the reference, and it really stops."""
+    X, G = toy(seed=71)
+    rng = np.random.default_rng(73)
+    nq, S, m, budget, k = 4, 4, 32, 64, 10
+    Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
+    Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
+    seeds = rng.integers(0, X.shape[0], (nq, 1, S)).astype(np.int32)
+    Xg, Gg, Qg = to_gpu(X, G, Qv)
+    for eps in (0.0, 0.1, 0.25):
+        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m, max_expansions=budget,
+                                deg=G.shape[1], policy=engine.POLICY_ROUND_ROBIN,
+                                stop_eps=eps, kstop=k)
+        engine.advance(Xg, Gg, Qg, st, budget)
+        st.check()
+        gi, gd = st.ids.cpu().numpy(), st.dist.cpu().numpy()
+        for q in range(nq):
+            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), m=m, budget=budget,
+                             policy=engine.POLICY_ROUND_ROBIN, stop_eps=eps, kstop=k)
+            assert [e[0] for e in ref["queue"]] == [i for i in gi[q, 0] if i >= 0], \
+                f"ids differ at eps={eps}"
+            for slot, e in enumerate(ref["queue"]):
+                assert np.float32(e[1]) == gd[q, 0, slot], "distance differs"
+            assert ref["counters"]["expansions"] == int(st.expansions[q, 0])
+        assert int(st.expansions.max()) < budget, f"eps={eps} never stopped early"
+    return "early stop matches CPU and terminates before the budget"
+
+
 def test_shared_state_beats_split_branches_on_work():
     """S seeds in one state evaluate each node once; S branches do not.
 
@@ -293,7 +321,8 @@ def test_shared_state_beats_split_branches_on_work():
 TESTS = [test_cpu_gpu_exact, test_resume_equivalence, test_budget_is_a_state_property,
          test_brute_force_on_complete_graph, test_dead_branch_and_exhaustion,
          test_visited_overflow_is_reported, test_merge_dedup, test_determinism,
-         test_multiseed_matches_cpu, test_shared_state_beats_split_branches_on_work]
+         test_multiseed_matches_cpu, test_shared_state_beats_split_branches_on_work,
+         test_early_stop_matches_cpu]
 
 if __name__ == "__main__":
     fails = 0
