@@ -110,6 +110,8 @@ def main():
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
+    ap.add_argument("--bound", action="store_true",
+                    help="share the query's k-th best distance across its CTAs")
     ap.add_argument("--cache", action="store_true",
                     help="share one distance table per query across its branch CTAs")
     ap.add_argument("--half", action="store_true",
@@ -117,6 +119,13 @@ def main():
                          "catalog stay fp32, so recall is still measured against "
                          "the exact fp32 answer")
     ap.add_argument("--nq", type=int, default=0)
+    ap.add_argument("--subset", type=Path, default=None,
+                    help="npy of query indices (e.g. the hard decile)")
+    ap.add_argument("--hard", type=Path, default=None,
+                    help="npy of query indices to report recall on separately, while "
+                         "the batch itself stays whole -- otherwise a small subset is "
+                         "measured at a batch size that underfills the GPU, and the "
+                         "number says more about occupancy than about hardness")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
@@ -124,9 +133,13 @@ def main():
     man = json.loads((a.data / "manifest.json").read_text())
     X = np.load(a.data / "X.npy"); G = np.load(a.data / a.graph)
     Q = np.load(a.data / f"Q_{a.split}.npy"); gt = np.load(a.data / f"gt_{a.split}_ids.npy")
+    if a.subset is not None:
+        sel = np.load(a.subset)
+        Q, gt = np.ascontiguousarray(Q[sel]), gt[sel]
     if a.nq:
         Q, gt = Q[: a.nq], gt[: a.nq]
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
+    hard_idx = np.load(a.hard) if a.hard is not None else None
     pool = load_pool(a.data, a.pool, a.P)
     arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near)
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
@@ -139,7 +152,8 @@ def main():
           + (f"/{a.policy}" if a.fanout == "shared" else "")
           + (" X=fp16" if a.half else "") + f" tau={a.tau}\n")
     print(f"{'arm':13s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
-          f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}")
+          f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}"
+          + (f" {'hard@10':>9s}" if a.hard is not None else ""))
     rows = []
     policy = engine.POLICY_ROUND_ROBIN if a.policy == "rr" else engine.POLICY_BEST
     for E in a.E:
@@ -159,12 +173,15 @@ def main():
                 torch.cuda.synchronize(); t = time.perf_counter()
                 ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
                                               budget=B, team_size=a.team, policy=policy,
-                                              stop_eps=a.stop_eps, shared_cache=a.cache)
+                                              stop_eps=a.stop_eps, shared_cache=a.cache,
+                                              shared_bound=a.bound)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
                     best = ms if best is None else min(best, ms)
             st.check()
-            rec = recall_at_k(ids.cpu().numpy(), gt)
+            got = ids.cpu().numpy()
+            rec = recall_at_k(got, gt)
+            rec_hard = recall_at_k(got[hard_idx], gt[hard_idx]) if hard_idx is not None else None
             de = float(st.dist_evals.sum(1).float().mean())
             tot = best + sel_ms
             name = "single" if (E == 1 and arm == "distance") else arm
@@ -172,11 +189,12 @@ def main():
                 name = f"{name}/{a.policy}"
             rows.append(dict(arm=name, E=E, B=B, m=a.m, fanout=a.fanout, policy=a.policy,
                              stop_eps=a.stop_eps, expansions=float(st.expansions.sum(1).float().mean()),
-                             recall=rec, dist_per_q=de,
+                             recall=rec, recall_hard=rec_hard, dist_per_q=de,
                              select_ms=sel_ms, search_ms=best, total_ms=tot,
                              qps=Q.shape[0] / (tot / 1e3), **info))
             print(f"{name:13s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
                   f"{best:10.2f} {tot:9.2f} {Q.shape[0]/(tot/1e3):8.0f}"
+                  + (f" {rec_hard:9.4f}" if rec_hard is not None else "")
                   + (f"  fallback {info['fallback_rate']:.2f}" if info else ""))
 
     if a.out:

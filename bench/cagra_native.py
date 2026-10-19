@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--itopk", type=int, nargs="+", default=[32, 64, 128, 256, 512])
     ap.add_argument("--width", type=int, nargs="+", default=[1, 2, 4])
     ap.add_argument("--algo", nargs="+", default=["single_cta", "multi_cta"])
+    ap.add_argument("--subset", default=None, help="npy of query indices")
+    ap.add_argument("--hard", default=None,
+                    help="npy of indices to report recall on, with the batch kept whole")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
@@ -69,7 +72,11 @@ def main():
     G = np.load(a.data / "G.npy")
     Q = np.load(a.data / f"Q_{a.split}.npy")
     gt = np.load(a.data / f"gt_{a.split}_ids.npy")
+    if a.subset:
+        sel = np.load(a.subset)
+        Q, gt = np.ascontiguousarray(Q[sel]), gt[sel]
     nq = Q.shape[0]
+    hard_idx = np.load(a.hard) if a.hard else None
     res = Resources()
     if a.half:
         X = X.astype(np.float16)
@@ -114,10 +121,13 @@ def main():
                         print(f"{arm:11s} {algo:11s} {it:6d} {w:6d}   skipped: {type(e).__name__}")
                         continue
                     rec = recall_at_k(nbrs, gt)
-                    rows.append(dict(arm=arm, algo=algo, itopk=it, width=w,
-                                     recall=rec, batch_ms=ms, qps=nq / (ms / 1e3)))
+                    rec_hard = (recall_at_k(nbrs[hard_idx], gt[hard_idx])
+                                if hard_idx is not None else None)
+                    rows.append(dict(arm=arm, algo=algo, itopk=it, width=w, recall=rec,
+                                     recall_hard=rec_hard, batch_ms=ms, qps=nq / (ms / 1e3)))
                     print(f"{arm:11s} {algo:11s} {it:6d} {w:6d} {rec:10.4f} {ms:10.2f} "
-                          f"{nq/(ms/1e3):9.0f}")
+                          f"{nq/(ms/1e3):9.0f}"
+                          + (f" {rec_hard:9.4f}" if rec_hard is not None else ""))
 
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

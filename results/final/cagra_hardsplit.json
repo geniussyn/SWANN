@@ -1,0 +1,117 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.9308882521489972,
+      "recall_hard": 0.7103151862464183,
+      "batch_ms": 11.799251660704613,
+      "qps": 295781.46990650665
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 48,
+      "width": 4,
+      "recall": 0.9551289398280802,
+      "recall_hard": 0.7919770773638968,
+      "batch_ms": 18.476507626473904,
+      "qps": 188888.51023985635
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9630659025787967,
+      "recall_hard": 0.8217765042979941,
+      "batch_ms": 21.62197045981884,
+      "qps": 161409.89585041
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 96,
+      "width": 4,
+      "recall": 0.9752148997134671,
+      "recall_hard": 0.8724928366762178,
+      "batch_ms": 31.61291405558586,
+      "qps": 110397.92136414367
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9825787965616046,
+      "recall_hard": 0.9134670487106016,
+      "batch_ms": 41.489625349640846,
+      "qps": 84117.41418701943
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 192,
+      "width": 4,
+      "recall": 0.9898567335243554,
+      "recall_hard": 0.9464183381088825,
+      "batch_ms": 60.965219512581825,
+      "qps": 57245.75467623378
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9932091690544413,
+      "recall_hard": 0.9644699140401147,
+      "batch_ms": 80.39041142910719,
+      "qps": 43413.13768592513
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9962464183381089,
+      "recall_hard": 0.9796561604584526,
+      "batch_ms": 113.81410341709852,
+      "qps": 30664.038069254697
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9973638968481374,
+      "recall_hard": 0.9856733524355301,
+      "batch_ms": 150.21688491106033,
+      "qps": 23233.073978776367
+    }
+  ]
+}

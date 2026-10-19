@@ -558,6 +558,68 @@ points. At Q=64 the SMs are full again and E costs what it weighs.
 Against native CAGRA `multi_cta` at Q=1: 0.9969 costs it 0.33ms and costs us
 0.50ms. The gap is now about 1.5x, from 4x before the cache and the bound.
 
+## Head to head with CAGRA: fp32, test split, each on its own graph
+
+Everything in this section is fp32 -- the design document's "first comparison is
+the fp32 exact distance" -- on the **test** half, which nothing in this project
+has been tuned on. Each system searches the graph its own builder made: ours from
+`offline/build_graph.py --lid`, CAGRA's from `cagra.build`. QPS is always the
+full 3490-query batch; what changes between the two tables is only which queries
+the recall is read on.
+
+### Build
+
+| | build | mean varphi_2 |
+|---|---|---|
+| **ours** (candidates, robust prune, reverse, LID degree) | **1.81s** | 1.479 |
+| CAGRA (graph_degree 64, intermediate 128) | 4.65s | 1.328 |
+
+2.6x faster to build, on a graph that is still measurably more fragmented. Both
+timed in-process, warm, best of three.
+
+### recall-QPS, all queries
+
+| ours | recall@10 | QPS | CAGRA at the same recall | |
+|---|---|---|---|---|
+| m=32 | 0.9412 | 241,683 | 15.17ms | 1.06x |
+| m=48 | 0.9623 | 191,927 | 21.33ms | 1.17x |
+| m=64 | 0.9711 | 160,446 | 28.27ms | 1.30x |
+| m=96 | 0.9815 | 125,008 | 39.99ms | 1.43x |
+| m=128 | 0.9861 | 103,540 | 50.92ms | 1.51x |
+| m=128, P=16k | 0.9877 | 98,655 | 55.06ms | **1.56x** |
+
+The advantage grows with recall: a tie at 0.94, half again as fast at 0.986.
+
+### recall-QPS, hardest 10% of queries
+
+The decile is chosen by phi-hat_1 at out-degree 64 -- index-free, computed from
+the embedding alone -- so **both systems are scored on the same 349 queries**,
+and the choice cannot favour either graph. Those queries average phi-hat_1 7.02
+against 2.46 overall. The batch stays whole at 3490 queries; only the recall is
+restricted, because running 349 queries as their own batch leaves 349 CTAs on
+188 SMs and measures occupancy rather than difficulty (it reverses the result if
+you let it).
+
+| ours | hard@10 | all@10 | QPS | CAGRA at the same hard@10 | |
+|---|---|---|---|---|---|
+| m=32 | 0.7524 | 0.9412 | 241,683 | 15.24ms | 1.06x |
+| m=48 | 0.8175 | 0.9623 | 191,927 | 21.17ms | 1.16x |
+| m=64 | 0.8550 | 0.9711 | 160,446 | 28.17ms | 1.30x |
+| m=96 | 0.9026 | 0.9815 | 125,008 | 38.87ms | 1.39x |
+| m=128 | 0.9249 | 0.9861 | 103,540 | 48.26ms | 1.43x |
+| m=128, S=16 | 0.9327 | 0.9873 | 97,990 | 52.84ms | 1.48x |
+
+**The hard decile is not where the advantage lives.** The speedup profile is the
+same shape as on all queries and slightly smaller at the top -- the same m=128
+run is 1.51x by all-query recall and 1.43x by hard-decile recall. Hard queries
+are proportionally harder for both systems.
+
+What does differ, a little, is how much recall each loses on them: at matched
+work ours falls from 0.9861 to 0.9249 (93.8% of its own all-query recall) and
+CAGRA from 0.9826 to 0.9135 (93.0%). A real difference and a small one; the
+multi-entry machinery is not preferentially rescuing fragmented queries at this
+operating point, which is worth knowing before any claim is built on it.
+
 ## Running it
 
 ```bash
