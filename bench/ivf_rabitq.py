@@ -32,22 +32,29 @@ def per_query_recall(got, gt):
 
 @torch.no_grad()
 def gather_candidates(lists, order, starts, counts, budget):
-    """[Q, budget] of vector ids, filled from the nearest probed lists, -1 padded."""
+    """[Q, budget] of vector ids, filled from the nearest probed lists, -1 padded.
+
+    One `searchsorted` instead of a loop over probes: the per-list counts give a
+    running offset, so the list a given output slot belongs to is a binary search
+    in that offset array, and the rank within the list is the remainder. The loop
+    this replaces built a [Q, budget] mask per probe and cost more than the scan
+    it was feeding.
+    """
     Q, P = lists.shape
     dev = lists.device
     cnt = counts[lists].to(torch.int64)                       # [Q, P]
-    pos = torch.cumsum(cnt, dim=1) - cnt                      # start slot per list
-    cand = torch.full((Q, budget), -1, dtype=torch.int64, device=dev)
-    lid = torch.full((Q, budget), 0, dtype=torch.int64, device=dev)
-    slot = torch.arange(budget, device=dev).view(1, -1)
-    for p in range(P):
-        take = (slot >= pos[:, p:p + 1]) & (slot < (pos[:, p:p + 1] + cnt[:, p:p + 1]))
-        rank = (slot - pos[:, p:p + 1]).clamp(min=0)
-        src = (starts[lists[:, p]].to(torch.int64).view(-1, 1) + rank).clamp(
-            max=order.numel() - 1)
-        cand = torch.where(take, order[src].to(torch.int64), cand)
-        lid = torch.where(take, lists[:, p:p + 1].expand(-1, budget), lid)
-    return cand, lid
+    cum = torch.cumsum(cnt, dim=1)                            # inclusive ends
+    base = cum - cnt                                          # start of each list
+    slot = torch.arange(budget, device=dev).view(1, -1).expand(Q, budget)
+    li = torch.searchsorted(cum.contiguous(), slot.contiguous(), right=True)
+    ok = li < P
+    li = li.clamp(max=P - 1)
+    rank = slot - torch.gather(base, 1, li)
+    ok &= rank < torch.gather(cnt, 1, li)
+    chosen = torch.gather(lists, 1, li)                       # which list
+    src = (starts[chosen].to(torch.int64) + rank).clamp(0, order.numel() - 1)
+    cand = torch.where(ok, order[src].to(torch.int64), torch.full_like(src, -1))
+    return cand, torch.where(ok, chosen, torch.zeros_like(chosen))
 
 
 def main():
@@ -71,6 +78,9 @@ def main():
     gt = np.load(a.data / f"gt_{a.split}_ids.npy")
     nq = Q.shape[0]
 
+    pad = (-X.shape[1]) % 32
+    if pad:                    # the index was built on the padded dimension
+        Q = np.ascontiguousarray(np.pad(Q, ((0, 0), (0, pad))))
     Xg = torch.from_numpy(X).cuda()
     Qg = torch.from_numpy(Q).cuda()
     C = torch.from_numpy(np.load(ix / "centroids.npy")).cuda()
@@ -106,7 +116,8 @@ def main():
                                     cand.to(torch.int32).contiguous(), cdot.contiguous())
                 top = torch.topk(est, min(kk, budget), dim=1).indices
                 shortlist = torch.gather(cand, 1, top)                 # [Q, kk]
-                exact = torch.einsum("qd,qcd->qc", Qg, Xg[shortlist])  # fp32 rerank
+                exact = torch.einsum("qd,qcd->qc", Qg[:, :Xg.shape[1]],
+                                     Xg[shortlist])                    # fp32 rerank
                 fin = torch.gather(shortlist, 1, torch.topk(exact, a.k, dim=1).indices)
                 torch.cuda.synchronize()
                 ms = (time.perf_counter() - t) * 1e3

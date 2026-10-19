@@ -1,0 +1,50 @@
+{
+  "manifest": {
+    "corpus": "gist-960",
+    "n": 1000000,
+    "d": 960,
+    "d_original": 960,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "sqeuclidean",
+    "graph": "exact_knn",
+    "source": "/workspace/annbench/gist-960-euclidean.hdf5"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 500,
+  "build_seconds": 141.89,
+  "k_build": 64,
+  "tau_build": 0.5,
+  "measure": "euclidean",
+  "rows": [
+    {
+      "algo": "ggnn",
+      "itopk": 0.3,
+      "width": 0,
+      "recall": 0.782,
+      "recall_hard": null,
+      "batch_ms": 8.40295900025012,
+      "qps": 59502.8489351331
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 0.6,
+      "width": 0,
+      "recall": 0.9466,
+      "recall_hard": null,
+      "batch_ms": 25.844213999789645,
+      "qps": 19346.6901335854
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 1.0,
+      "width": 0,
+      "recall": 0.9472,
+      "recall_hard": null,
+      "batch_ms": 27.459516000362783,
+      "qps": 18208.623924521984
+    }
+  ]
+}

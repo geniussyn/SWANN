@@ -1,4 +1,6 @@
-# gpuann — multi-entry ANN on one GPU
+# SWANN — multi-entry ANN on one GPU
+
+*(package and directory are still `gpuann`.)*
 
 Implementation of *GPU 다중 엔트리 ANN 구현 설계안 3종* (2026-10-19). Fixed
 vectors, fixed search graph; the only thing the designs are allowed to differ in
@@ -70,7 +72,7 @@ comparison against a handicapped baseline. It is kept as `G_knn.npy`.
 each of our configurations, the time CAGRA needs for *that* recall.
 `>1x` means ours is faster.
 
-| ours | recall@10 | ours ms | CAGRA ms | |
+| SWANN | recall@10 | SWANN ms | CAGRA ms | |
 |---|---|---|---|---|
 | L=16, V=1 | 0.8702 | 7.61 | 6.89 | 0.90x |
 | L=24, V=1 | 0.9080 | 10.03 | 9.52 | 0.95x |
@@ -218,7 +220,7 @@ remove -- not done).
 
 Selection cost included, matched recall, 3490 val queries. `>1x` is ours faster:
 
-| ours | recall@10 | ours ms | CAGRA ms | |
+| SWANN | recall@10 | SWANN ms | CAGRA ms | |
 |---|---|---|---|---|
 | V=1, L=64 (the old best) | 0.9635 | 19.61 | 21.28 | 1.09x |
 | V=8, L=64, B=64 | 0.9662 | 18.45 | 23.34 | 1.26x |
@@ -260,7 +262,7 @@ unoptimised and that is the one number here that is worse.
 Searched with the shared round-robin engine, against native CAGRA on *CAGRA's*
 graph, at matched recall:
 
-| ours, on our graph | recall@10 | ours ms | CAGRA ms | |
+| SWANN, on its own graph | recall@10 | SWANN ms | CAGRA ms | |
 |---|---|---|---|---|
 | V=8, L=64 | 0.9679 | 20.27 | 24.80 | 1.22x |
 | V=8, L=96 | 0.9778 | 26.77 | 33.16 | 1.24x |
@@ -329,7 +331,7 @@ little. The only levers left are fewer vectors or smaller ones.
 *more* from the same change -- 41.6ms to 11.1ms at recall 0.983, a 3.7x -- and
 with both sides on fp16 the result flips:
 
-| ours (fp16, our graph) | recall@10 | ours ms | CAGRA fp16 ms | |
+| SWANN (fp16, our graph) | recall@10 | SWANN ms | CAGRA fp16 ms | |
 |---|---|---|---|---|
 | L=128, V=8 | 0.9852 | 20.98 | 12.70 | 0.61x |
 | L=96, V=8 | 0.9800 | 16.87 | 10.00 | 0.59x |
@@ -444,7 +446,7 @@ random both 0.9922.
 
 ### But CAGRA already does this, and does it better
 
-| Q=64, matched recall | ours | native CAGRA multi_cta |
+| Q=64, matched recall | SWANN | native CAGRA multi_cta |
 |---|---|---|
 | 0.9953 | 2.96ms | ~0.74ms |
 | 0.9969 | 9.81ms (V=400) | 0.79ms (itopk 256) |
@@ -579,7 +581,7 @@ timed in-process, warm, best of three.
 
 ### recall-QPS, all queries
 
-| ours | recall@10 | QPS | CAGRA at the same recall | |
+| SWANN | recall@10 | QPS | CAGRA at the same recall | |
 |---|---|---|---|---|
 | L=32 | 0.9412 | 241,683 | 15.17ms | 1.06x |
 | L=48 | 0.9623 | 191,927 | 21.33ms | 1.17x |
@@ -607,7 +609,7 @@ The batch stays whole at 3490 queries and only the recall is restricted. Running
 349 queries as their own batch leaves 349 CTAs on 188 SMs and measures occupancy
 rather than difficulty -- it reverses the result if you let it.
 
-| ours | hard@10 | all@10 | QPS | CAGRA at the same hard@10 | |
+| SWANN | hard@10 | all@10 | QPS | CAGRA at the same hard@10 | |
 |---|---|---|---|---|---|
 | L=32 | 0.7556 | 0.9412 | 243,634 | 17.07ms | 1.19x |
 | L=48 | 0.8178 | 0.9623 | 191,036 | 24.42ms | 1.34x |
@@ -831,6 +833,31 @@ FEVER repeats it: 1.67x at 0.9363, 1.66x at 0.9577, **2.02x at 0.9771**, and
 Both halves are nondeterministic -- which branch claims a node, and which lowers
 the bound first, depend on CTA order -- so both are flags and both are off by
 default. Measured drift is 0.00014 recall over six runs.
+
+## Build: exact candidates, and the approximate stage that is not here
+
+The build is 66.4s at 1M against CAGRA's 6.8s, and 55.2s of that is the exact
+candidate sweep -- every vector against every other, O(N^2). It stays, because
+the build is offline and because the robust prune then chooses from the true
+neighbours rather than from a guess at them.
+
+An approximate candidate stage was written and removed. Neighbourhood
+propagation -- each round scoring a node against its own list, the nodes that
+list it, and a sample of its neighbours' neighbours -- converged but to the
+wrong place: starting from random lists it reached 0.64 of the exact top-10
+after 20 rounds and 45s, and starting from a k-means initialisation it
+converged in 12 rounds and 27s to **0.485**. More rounds did not move it
+(0.4825 at 4 rounds, 0.4854 at 16), which is the signature of a fixed point
+rather than slow convergence: the only new material each round is the
+neighbours of an already-wrong list.
+
+Real NN-descent does not have that problem because its local join compares
+*pairs within* a node's neighbourhood and pushes the result to both endpoints,
+so information flows from every node that lists you, not only through your own
+list. That is a scatter with top-k semantics over N x S^2 triples and wants its
+own kernel. At 2x the speed of the exact sweep for half its quality, the
+propagation form was not worth keeping, and the kernel is not worth writing
+while the build is offline.
 
 ## Running it
 

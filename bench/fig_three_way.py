@@ -1,4 +1,4 @@
-"""ours against CAGRA and GGNN on one panel per corpus, all queries.
+"""SWANN against CAGRA and GGNN on one panel per corpus, all queries.
 
 Each system is drawn on its own recall-QPS frontier, built from whatever knob
 that system actually exposes: queue width for ours, itopk for CAGRA, and
@@ -62,7 +62,7 @@ def main():
     for i, (name, og, cj, gg) in enumerate(panels):
         ax = axes[0][i]
         series = [(pts_native(cj, "single_cta"), "CAGRA", H.RED, "s"),
-                  (pts_ours(og), "ours", H.BLUE, "o")]
+                  (pts_ours(og), "SWANN", H.BLUE, "o")]
         if gg:
             series.insert(0, (pts_ggnn(gg), "GGNN", H.GREEN, "^"))
         for pts, label, colour, mk in series:
@@ -80,7 +80,9 @@ def main():
         ax.set_xticks([], minor=True)
         ax.set_xticklabels([f"{int(t/1000)}k" if t < 1e6 else f"{t/1e6:g}M"
                             for t in ax.get_xticks()])
-    axes[0][0].legend(loc="lower left", frameon=True, facecolor=H.PANEL)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels),
+               frameon=True, facecolor=H.PANEL, bbox_to_anchor=(0.5, 1.06))
     fig.tight_layout()
     for ext in ("pdf", "png"):
         p = Path(f"{a.out}.{ext}"); p.parent.mkdir(parents=True, exist_ok=True)

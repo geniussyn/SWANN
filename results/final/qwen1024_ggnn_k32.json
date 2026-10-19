@@ -1,0 +1,50 @@
+{
+  "manifest": {
+    "corpus": "qwen-1024",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "model": "Qwen/Qwen3-Embedding-8B",
+    "note": "MRL prefix of one Qwen3-Embedding-8B encode, renormalised"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "build_seconds": 7.16,
+  "k_build": 32,
+  "tau_build": 0.5,
+  "measure": "cosine",
+  "rows": [
+    {
+      "algo": "ggnn",
+      "itopk": 0.3,
+      "width": 0,
+      "recall": 0.9859025787965616,
+      "recall_hard": null,
+      "batch_ms": 34.45618200021272,
+      "qps": 101288.06493936136
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 0.6,
+      "width": 0,
+      "recall": 0.9884240687679083,
+      "recall_hard": null,
+      "batch_ms": 53.649925000172516,
+      "qps": 65051.3490930095
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 1.0,
+      "width": 0,
+      "recall": 0.9884527220630372,
+      "recall_hard": null,
+      "batch_ms": 58.96798499998113,
+      "qps": 59184.65757310712
+    }
+  ]
+}

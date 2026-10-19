@@ -1,0 +1,107 @@
+{
+  "manifest": {
+    "corpus": "fever",
+    "arm": "vanilla",
+    "n": 1000000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "graph_note": "stand-in: not a navigable built graph, not a CAGRA comparison",
+    "source": "/workspace/SYN/emb/fever__vanilla_docs.npy"
+  },
+  "index": {
+    "n": 1000000,
+    "d": 1024,
+    "words": 32,
+    "n_lists": 2000,
+    "iters": 25,
+    "seed": 0,
+    "build_seconds": 3.65,
+    "bytes_per_vector": {
+      "code": 128,
+      "scalars": 8,
+      "fp32": 4096
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3333,
+  "probes": 512,
+  "rows": [
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 20000,
+      "width": 2,
+      "recall": 0.728082808280828,
+      "recall_hard": null,
+      "batch_ms": 23.715340999842738,
+      "qps": 140541.93865574617
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 20000,
+      "width": 10,
+      "recall": 0.7946594659465946,
+      "recall_hard": null,
+      "batch_ms": 25.828566000200226,
+      "qps": 129043.16871382493
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 50000,
+      "width": 2,
+      "recall": 0.8010501050105011,
+      "recall_hard": null,
+      "batch_ms": 57.54598700059432,
+      "qps": 57918.89536911718
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 50000,
+      "width": 10,
+      "recall": 0.8884788478847885,
+      "recall_hard": null,
+      "batch_ms": 59.70903400066163,
+      "qps": 55820.69875662479
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 100000,
+      "width": 2,
+      "recall": 0.8390639063906392,
+      "recall_hard": null,
+      "batch_ms": 113.80841099980898,
+      "qps": 29286.06041257877
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 100000,
+      "width": 10,
+      "recall": 0.9395739573957397,
+      "recall_hard": null,
+      "batch_ms": 116.01533799967001,
+      "qps": 28728.959958807172
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 200000,
+      "width": 2,
+      "recall": 0.8623462346234623,
+      "recall_hard": null,
+      "batch_ms": 226.67785599969648,
+      "qps": 14703.685921594666
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 200000,
+      "width": 10,
+      "recall": 0.9708670867086711,
+      "recall_hard": null,
+      "batch_ms": 228.68983799980924,
+      "qps": 14574.324898523826
+    }
+  ]
+}

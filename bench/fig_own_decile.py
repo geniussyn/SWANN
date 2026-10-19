@@ -76,7 +76,7 @@ def main():
         for col in (0, 1):
             ax = axes[row][col]
             for rows, label, colour, mk in ((nat, "CAGRA", H.RED, "s"),
-                                            (ours, "ours", H.BLUE, "o")):
+                                            (ours, "SWANN", H.BLUE, "o")):
                 P = np.array([r["perq"] for r in rows])
                 if col == 0:
                     ys = [r["recall"] for r in rows]
@@ -98,7 +98,9 @@ def main():
             ax.set_xticks([], minor=True)
             ax.set_xticklabels([f"{int(t/1000)}k" if t < 1e6 else f"{t/1e6:g}M"
                                 for t in ax.get_xticks()])
-    axes[0][0].legend(loc="lower left", frameon=True, facecolor=H.PANEL)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels),
+               frameon=True, facecolor=H.PANEL, bbox_to_anchor=(0.5, 1.06))
     fig.tight_layout()
     for ext in ("pdf", "png"):
         p = Path(f"{a.out}.{ext}"); p.parent.mkdir(parents=True, exist_ok=True)

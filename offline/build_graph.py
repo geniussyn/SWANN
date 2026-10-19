@@ -2,9 +2,12 @@
 
 Three stages, none of which needs cuVS:
 
-  candidates   exact top-C by one chunked sweep of the corpus. At 100K this is
-               a second; NN-descent replaces it when N stops allowing it, and
-               nothing downstream changes.
+  candidates   exact top-C by one chunked sweep of the corpus -- every vector
+               against every other. It is O(N^2) and it is the bulk of the build
+               (55 s of 66 s at 1M), which is affordable because the build is
+               offline and because the prune then chooses from the true
+               neighbours rather than from a guess at them. An approximate
+               candidate stage was tried and is not here: see README.
   prune        a Vamana-style robust prune: walk a node's candidates nearest
                first and keep v only when no already-kept w is close enough to
                serve as a detour (d(w,v) <= alpha * d(u,v)). This is the step
@@ -265,7 +268,8 @@ def main():
     if lid is not None:
         np.save(a.data / (Path(a.out).stem + "_lid.npy"), lid.cpu().numpy().astype(np.float32))
     (a.data / (Path(a.out).stem + ".json")).write_text(json.dumps(
-        dict(deg=a.D, cand=a.cand, alpha=a.alpha, metric=metric, lid=bool(a.lid),
+        dict(deg=a.D, cand=a.cand, candidates="exact", alpha=a.alpha,
+             metric=metric, lid=bool(a.lid),
              lid_range=[a.lid_lo, a.lid_hi], seconds=round(t3 - t0, 2),
              stage_seconds=dict(candidates=round(t1 - t0, 2), prune=round(t2 - t1, 2),
                                 reverse=round(t3 - t2, 2))), indent=2))

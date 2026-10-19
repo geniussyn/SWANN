@@ -1,4 +1,6 @@
-# gpuann — algorithms and architecture
+# SWANN — algorithms and architecture
+
+*(package and directory are still `gpuann`.)*
 
 Every design choice named here was settled by a measurement, and the number that
 settled it is quoted next to it. `README.md` has the full tables; this file is

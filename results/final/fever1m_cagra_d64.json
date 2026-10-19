@@ -1,0 +1,101 @@
+{
+  "manifest": {
+    "corpus": "fever",
+    "arm": "vanilla",
+    "n": 1000000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "graph_note": "stand-in: not a navigable built graph, not a CAGRA comparison",
+    "source": "/workspace/SYN/emb/fever__vanilla_docs.npy"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3333,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.7858385838583859,
+      "recall_hard": null,
+      "batch_ms": 17.987565999646904,
+      "qps": 185294.66410660712
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.8524752475247526,
+      "recall_hard": null,
+      "batch_ms": 33.02834600026472,
+      "qps": 100913.31851656412
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 96,
+      "width": 4,
+      "recall": 0.8850585058505851,
+      "recall_hard": null,
+      "batch_ms": 47.9670940003416,
+      "qps": 69485.13495473092
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9060306030603061,
+      "recall_hard": null,
+      "batch_ms": 62.97555299988744,
+      "qps": 52925.29944129204
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 192,
+      "width": 4,
+      "recall": 0.9297929792979298,
+      "recall_hard": null,
+      "batch_ms": 92.06782800038127,
+      "qps": 36201.57086779757
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.944044404440444,
+      "recall_hard": null,
+      "batch_ms": 121.5225709997867,
+      "qps": 27427.00366342521
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9613261326132614,
+      "recall_hard": null,
+      "batch_ms": 179.27631800012023,
+      "qps": 18591.412614786994
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.96984698469847,
+      "recall_hard": null,
+      "batch_ms": 237.41885700019338,
+      "qps": 14038.480523883936
+    }
+  ]
+}

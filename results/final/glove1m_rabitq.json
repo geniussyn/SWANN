@@ -1,0 +1,70 @@
+{
+  "manifest": {
+    "corpus": "glove-100",
+    "n": 1183514,
+    "d": 104,
+    "d_original": 100,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "source": "/workspace/annbench/glove-100-angular.hdf5"
+  },
+  "index": {
+    "n": 1183514,
+    "d": 128,
+    "words": 4,
+    "n_lists": 2175,
+    "iters": 25,
+    "seed": 0,
+    "build_seconds": 1.51,
+    "bytes_per_vector": {
+      "code": 16,
+      "scalars": 8,
+      "fp32": 512
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 5000,
+  "probes": 512,
+  "rows": [
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 5000,
+      "width": 10,
+      "recall": 0.61942,
+      "recall_hard": null,
+      "batch_ms": 7.218259000183025,
+      "qps": 692687.8073886266
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 20000,
+      "width": 10,
+      "recall": 0.7203,
+      "recall_hard": null,
+      "batch_ms": 26.635378000719356,
+      "qps": 187720.2568653226
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 50000,
+      "width": 10,
+      "recall": 0.75618,
+      "recall_hard": null,
+      "batch_ms": 65.15375599974504,
+      "qps": 76741.54656593499
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 100000,
+      "width": 10,
+      "recall": 0.7714799999999999,
+      "recall_hard": null,
+      "batch_ms": 129.27205500000127,
+      "qps": 38678.11956729512
+    }
+  ]
+}

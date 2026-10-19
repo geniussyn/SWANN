@@ -151,7 +151,8 @@ def main():
     ap.add_argument("--L-cand", dest="L_cand", type=int, default=32,
                     help="candidate list size for the A/MMR selectors")
     ap.add_argument("--n-near", type=int, default=24)
-    ap.add_argument("--total-budget", type=int, default=128)
+    ap.add_argument("--total-B", dest="total_B", type=int, default=128,
+                    help="expansions per query when B is not given, split across branches")
     ap.add_argument("--B", type=int, default=0, help="expansions per branch; 0 = total // V")
     ap.add_argument("--V", type=int, nargs="+", default=[1, 2, 4, 8, 16],
                     help="entries (branches, or lineages when shared)")

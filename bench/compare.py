@@ -1,4 +1,4 @@
-"""Our engine against native CAGRA, at matched recall, on the same everything.
+"""SWANN against native CAGRA, at matched recall, on the same everything.
 
 A latency number only means something next to the recall it bought, so neither
 side is reported alone: each of our configurations is placed against the time
@@ -82,7 +82,7 @@ def main():
           "  ".join(f"{r:.4f}@{t:.1f}ms" for r, t in front) + "\n")
 
     label = "hard@10" if a.metric == "recall_hard" else "recall@10"
-    print(f"{'ours':26s} {label:>10s} {'ms':>7s} {'CAGRA ms':>9s} {'speedup':>8s}")
+    print(f"{'SWANN':26s} {label:>10s} {'ms':>7s} {'CAGRA ms':>9s} {'speedup':>8s}")
     scored = []
     for r in sorted(ours, key=lambda x: (rec(x) is None, rec(x))):
         if rec(r) is None:
@@ -99,8 +99,8 @@ def main():
 
     if scored:
         best = max(scored)
-        print(f"\nbest of ours: {best[1].strip()} at {best[0]:.2f}x native CAGRA "
-              f"(>1 means ours is faster at the same recall)")
+        print(f"\nbest SWANN point: {best[1].strip()} at {best[0]:.2f}x native CAGRA "
+              f"(>1 means SWANN is faster at the same recall)")
 
 
 if __name__ == "__main__":

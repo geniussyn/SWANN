@@ -69,7 +69,7 @@ def main():
     for ax_i, label, yi in panels:
         ax = axes[ax_i]
         for rows, name, colour, mk in ((nat, "CAGRA", H.RED, "s"),
-                                       (ours, "ours", H.BLUE, "o")):
+                                       (ours, "SWANN", H.BLUE, "o")):
             f = frontier(rows, yi)
             ax.plot([r[2] for r in f], [r[yi] for r in f],
                     marker=mk, color=colour, lw=H.LW, ms=H.ms(H.MS[mk]),
@@ -86,7 +86,9 @@ def main():
         ax.set_xlabel("QPS (batch of 3490 queries)")
         ax.set_ylabel("recall@10" if ax_i == 0 else "recall@10, hardest 10%")
         ax.set_title(label, fontsize=11)
-    axes[0].legend(loc="lower left", frameon=True, facecolor=H.PANEL)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels),
+               frameon=True, facecolor=H.PANEL, bbox_to_anchor=(0.5, 1.06))
     fig.suptitle(a.title, fontsize=10, color=H.INK, y=1.02)
     fig.tight_layout()
     for ext in ("pdf", "png"):

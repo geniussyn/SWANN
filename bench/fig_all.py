@@ -1,4 +1,4 @@
-"""Every system on one panel: ours, CAGRA, GGNN, IVF-PQ on the GPU, HNSW on CPU.
+"""Every system on one panel: SWANN, CAGRA, GGNN, IVF-PQ on the GPU, HNSW on CPU.
 
 Each is drawn on its own recall-QPS frontier over whatever it exposes -- for us
 the graph degree crossed with fan-out and retirement slack, for CAGRA itopk
@@ -71,7 +71,10 @@ def main():
              if ax.get_xlim()[0] <= t <= ax.get_xlim()[1]]
     ax.set_xticks(ticks); ax.set_xticks([], minor=True)
     ax.set_xticklabels([f"{t//1000}k" if t >= 1000 else str(t) for t in ticks])
-    ax.legend(loc="lower left", frameon=True, facecolor=H.PANEL, fontsize=10)
+    # Outside the axes: at five series the legend covered the part of the
+    # curve it was there to explain.
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=True,
+              facecolor=H.PANEL, fontsize=10, borderaxespad=0.0)
     fig.tight_layout()
     for ext in ("pdf", "png"):
         p = Path(f"{a.out}.{ext}"); p.parent.mkdir(parents=True, exist_ok=True)

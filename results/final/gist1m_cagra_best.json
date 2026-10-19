@@ -1,0 +1,120 @@
+{
+  "manifest": {
+    "corpus": "gist-960",
+    "n": 1000000,
+    "d": 960,
+    "d_original": 960,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "sqeuclidean",
+    "graph": "exact_knn",
+    "source": "/workspace/annbench/gist-960-euclidean.hdf5"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 500,
+  "metric": "sqeuclidean",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.7990000000000002,
+      "recall_hard": null,
+      "batch_ms": 2.912744999775896,
+      "qps": 171659.37973920463
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.8680000000000001,
+      "recall_hard": null,
+      "batch_ms": 4.584458999943308,
+      "qps": 109064.12294366315
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.8964000000000001,
+      "recall_hard": null,
+      "batch_ms": 5.051521000041248,
+      "qps": 98980.08936237566
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.9374000000000001,
+      "recall_hard": null,
+      "batch_ms": 7.873544999711157,
+      "qps": 63503.79657680786
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9574000000000001,
+      "recall_hard": null,
+      "batch_ms": 9.355713999866566,
+      "qps": 53443.27541512397
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9798,
+      "recall_hard": null,
+      "batch_ms": 14.666551000118488,
+      "qps": 34091.17794605975
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9864,
+      "recall_hard": null,
+      "batch_ms": 17.86593399992853,
+      "qps": 27986.222270943137
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9934,
+      "recall_hard": null,
+      "batch_ms": 25.93767400003344,
+      "qps": 19276.97911537308
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.995,
+      "recall_hard": null,
+      "batch_ms": 27.712491000329464,
+      "qps": 18042.405498446737
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9986,
+      "recall_hard": null,
+      "batch_ms": 41.380996000043524,
+      "qps": 12082.841118649587
+    }
+  ]
+}

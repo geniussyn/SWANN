@@ -1,0 +1,50 @@
+{
+  "manifest": {
+    "corpus": "glove-100",
+    "n": 1183514,
+    "d": 104,
+    "d_original": 100,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "source": "/workspace/annbench/glove-100-angular.hdf5"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 5000,
+  "build_seconds": 20.12,
+  "k_build": 32,
+  "tau_build": 0.5,
+  "measure": "cosine",
+  "rows": [
+    {
+      "algo": "ggnn",
+      "itopk": 0.3,
+      "width": 0,
+      "recall": 0.8772200000000001,
+      "recall_hard": null,
+      "batch_ms": 12.682990000030259,
+      "qps": 394228.8056671235
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 0.6,
+      "width": 0,
+      "recall": 0.88626,
+      "recall_hard": null,
+      "batch_ms": 19.751353000174277,
+      "qps": 253147.21477338197
+    },
+    {
+      "algo": "ggnn",
+      "itopk": 1.0,
+      "width": 0,
+      "recall": 0.8866599999999999,
+      "recall_hard": null,
+      "batch_ms": 21.62944299971059,
+      "qps": 231166.37816641424
+    }
+  ]
+}

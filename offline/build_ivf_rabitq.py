@@ -68,7 +68,10 @@ def main():
 
     X = np.load(a.data / "X.npy")
     n, D = X.shape
-    assert D % 32 == 0, "D must be a multiple of 32 for the packed codes"
+    pad = (-D) % 32            # the codes pack 32 dimensions to a word
+    if pad:
+        X = np.ascontiguousarray(np.pad(X, ((0, 0), (0, pad))))
+        D += pad
     lists = a.lists or int(2 * np.sqrt(n))
     Xg = torch.from_numpy(X).cuda()
 

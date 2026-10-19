@@ -1,0 +1,70 @@
+{
+  "manifest": {
+    "corpus": "qwen-2560",
+    "n": 100000,
+    "d": 2560,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "model": "Qwen/Qwen3-Embedding-8B",
+    "note": "MRL prefix of one Qwen3-Embedding-8B encode, renormalised"
+  },
+  "index": {
+    "n": 100000,
+    "d": 2560,
+    "words": 80,
+    "n_lists": 632,
+    "iters": 25,
+    "seed": 0,
+    "build_seconds": 1.48,
+    "bytes_per_vector": {
+      "code": 320,
+      "scalars": 8,
+      "fp32": 10240
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "probes": 512,
+  "rows": [
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 2000,
+      "width": 10,
+      "recall": 0.8299140401146133,
+      "recall_hard": null,
+      "batch_ms": 14.081699000598746,
+      "qps": 247839.41198087015
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 5000,
+      "width": 10,
+      "recall": 0.9108309455587393,
+      "recall_hard": null,
+      "batch_ms": 23.37655200062727,
+      "qps": 149294.9002875339
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 10000,
+      "width": 10,
+      "recall": 0.9502005730659027,
+      "recall_hard": null,
+      "batch_ms": 38.658811999994214,
+      "qps": 90276.95936441406
+    },
+    {
+      "algo": "ivf_rabitq",
+      "itopk": 20000,
+      "width": 10,
+      "recall": 0.9756446991404012,
+      "recall_hard": null,
+      "batch_ms": 69.40721799946914,
+      "qps": 50282.95472131866
+    }
+  ]
+}
