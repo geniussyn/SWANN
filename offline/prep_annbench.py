@@ -24,7 +24,7 @@ import h5py
 import numpy as np
 import torch
 
-from prep_data import exact_topk, knn_graph        # noqa: E402  (same directory)
+from prep_data import exact_topk, exact_topk_l2, knn_graph   # noqa: E402
 
 
 def main():
@@ -71,11 +71,26 @@ def main():
     np.save(out / "X.npy", X)
     np.save(out / "Q_val.npy", Qall[val]); np.save(out / "Q_test.npy", Qall[test])
     np.save(out / "qidx_val.npy", val);    np.save(out / "qidx_test.npy", test)
+    topk = exact_topk if metric == "ip" else exact_topk_l2
     for split, Q in (("val", Qall[val]), ("test", Qall[test])):
-        gi, gv = exact_topk(np.ascontiguousarray(Q), X, a.k)
+        gi, gv = topk(np.ascontiguousarray(Q), X, a.k)
         np.save(out / f"gt_{split}_ids.npy", gi); np.save(out / f"gt_{split}_sim.npy", gv)
         print(f"  gt_{split}: {gi.shape}")
-    G = knn_graph(X, a.deg)
+    if metric == "ip":
+        G = knn_graph(X, a.deg)
+    else:
+        # A kNN graph by L2; the builder replaces it, this is only the stand-in.
+        import torch as _t
+        n = X.shape[0]
+        G = np.empty((n, a.deg), dtype=np.int32)
+        Xt = _t.from_numpy(X).cuda(); xn = (Xt * Xt).sum(1)
+        for s2 in range(0, n, 10000):
+            e2 = min(s2 + 10000, n)
+            sc = xn.view(1, -1) - 2.0 * (Xt[s2:e2] @ Xt.T)
+            sc[_t.arange(e2 - s2, device=sc.device), _t.arange(s2, e2, device=sc.device)] = float("inf")
+            G[s2:e2] = _t.topk(sc, a.deg, dim=1, largest=False).indices.cpu().numpy().astype(np.int32)
+            del sc
+        del Xt; _t.cuda.empty_cache()
     np.save(out / "G_knn.npy", G)
     np.save(out / "G.npy", G)
     print(f"  G {G.shape} (exact kNN stand-in; build_graph.py writes the real one)")

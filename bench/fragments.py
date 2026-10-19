@@ -57,7 +57,7 @@ def main():
     ap.add_argument("--R", type=int, default=128)
     ap.add_argument("--tau", type=float, default=0.1)
     ap.add_argument("--configs", nargs="+", default=["distance:1:64:128", "distance:8:16:16"],
-                    help="arm:E:m:B[:shared-policy]  e.g. distance:8:64:128:rr")
+                    help="arm:V:L:B[:shared-policy]  e.g. distance:8:64:128:rr")
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
@@ -79,17 +79,17 @@ def main():
     rows = []
     for cfg in a.configs:
         parts = cfg.split(":")
-        arm, E, m, B = parts[0], int(parts[1]), int(parts[2]), int(parts[3])
+        arm, V, L, B = parts[0], int(parts[1]), int(parts[2]), int(parts[3])
         shared = len(parts) > 4
         policy = engine.POLICY_ROUND_ROBIN if shared and parts[4] == "rr" else engine.POLICY_BEST
-        seeds, sel_ms, _ = arms.seeds(arm, E)
+        seeds, sel_ms, _ = arms.seeds(arm, V)
         if shared:
             seeds = seeds.unsqueeze(1)
-        ids, _, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, m=m, budget=B, policy=policy)
+        ids, _, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, L=L, B=B, policy=policy)
         st.check()
         got = ids.cpu().numpy()
         s = fragment_stats(got, gt, frag)
-        print(f"--- {arm} E={E} m={m} B={B}"
+        print(f"--- {arm} V={V} L={L} B={B}"
               + (f" shared/{parts[4]}" if shared else " split") + " ---")
         print(f"{'queries':10s} {'n':>6s} {'recall@10':>10s} {'fragments hit':>14s} "
               f"{'recall in hit':>14s}")

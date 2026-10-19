@@ -72,14 +72,14 @@ each of our configurations, the time CAGRA needs for *that* recall.
 
 | ours | recall@10 | ours ms | CAGRA ms | |
 |---|---|---|---|---|
-| m=16, E=1 | 0.8702 | 7.61 | 6.89 | 0.90x |
-| m=24, E=1 | 0.9080 | 10.03 | 9.52 | 0.95x |
-| m=32, E=1 | 0.9294 | 11.86 | 11.78 | 0.99x |
-| **m=48, E=1** | **0.9503** | **15.72** | **17.12** | **1.09x** |
-| **m=64, E=1** | **0.9635** | **19.61** | **21.32** | **1.09x** |
-| m=16, E=8 distance | 0.9372 | 26.42 | 13.60 | 0.51x |
-| m=16, E=16 distance | 0.9493 | 26.29 | 16.86 | 0.64x |
-| m=64, E=2 distance | 0.9646 | 29.60 | 21.86 | 0.74x |
+| L=16, V=1 | 0.8702 | 7.61 | 6.89 | 0.90x |
+| L=24, V=1 | 0.9080 | 10.03 | 9.52 | 0.95x |
+| L=32, V=1 | 0.9294 | 11.86 | 11.78 | 0.99x |
+| **L=48, V=1** | **0.9503** | **15.72** | **17.12** | **1.09x** |
+| **L=64, V=1** | **0.9635** | **19.61** | **21.32** | **1.09x** |
+| L=16, V=8 distance | 0.9372 | 26.42 | 13.60 | 0.51x |
+| L=16, V=16 distance | 0.9493 | 26.29 | 16.86 | 0.64x |
+| L=64, V=2 distance | 0.9646 | 29.60 | 21.86 | 0.74x |
 
 So the engine itself is competitive: at recall 0.95 and above it is about 9%
 faster than native CAGRA, and at lower recall about 1-10% slower. Nothing in it
@@ -93,8 +93,8 @@ simply making one branch's queue wider**:
 
 | | recall@10 | ms | distances/query |
 |---|---|---|---|
-| E=1, m=64 | 0.9635 | 19.61 | 2495 |
-| E=16, m=16, nearest-by-distance | 0.9493 | 26.29 | 6910 |
+| V=1, L=64 | 0.9635 | 19.61 | 2495 |
+| V=16, L=16, nearest-by-distance | 0.9493 | 26.29 | 6910 |
 
 Worse recall, 34% more time, 2.8x the distance work. The branches re-evaluate
 each other's nodes -- they hold independent visited tables by design -- and each
@@ -103,20 +103,20 @@ themselves here, and no entry selector can be credited for a gain until it beats
 this row.
 
 (At a fixed budget, `m` only matters once `budget > m`: with 16 expansions per
-branch, m=16, 32 and 64 produce bitwise identical results, which is why the
+branch, L=16, 32 and 64 produce bitwise identical results, which is why the
 E>=8 rows repeat.)
 
 ### H0 oracle: the headroom is real, and it is at high recall
 
-P=512 random pool seeds, 16 expansions per branch, E=8 -- the *same* 128
+P=512 random pool seeds, 16 expansions per branch, V=8 -- the *same* 128
 expansions the arms above spend:
 
 | | recall@10 |
 |---|---|
 | one pool seed, alone | 0.7914 |
-| best single seed (exact DP, E=1) | 0.9310 |
+| best single seed (exact DP, V=1) | 0.9310 |
 | best 2 / 4 / 8 seeds (exact DP) | 0.9826 / 0.9985 / **0.9996** |
-| measured, nearest-by-distance E=8 | 0.9372 |
+| measured, nearest-by-distance V=8 | 0.9372 |
 
 Selection is worth 0.9372 -> 0.9996 at identical work. And a selector that
 reached it would sit at a recall native CAGRA needs well over 41.6ms to
@@ -135,12 +135,12 @@ built so the pool could be compared rather than assumed.
 
 **Placement is not a lever.** Five placements of P=512 entries sharing 1-4 ids
 between them give the same oracle ceiling to four decimals at every E (random,
-METIS, k-means, farthest-point, degree hubs; 1-seed 0.763-0.769, E=8
+METIS, k-means, farthest-point, degree hubs; 1-seed 0.763-0.769, V=8
 0.9992-0.9996). Graph regions, geometric regions, maximal spread and pure hubs
 are indistinguishable.
 
 **The sketch maximises its own objective and does not move recall.** The greedy
-lifts F by 38% at E=2 and covers 99.5% of all region weight at E=8; recall moves
+lifts F by 38% at V=2 and covers 99.5% of all region weight at V=8; recall moves
 by 0.0008 to 0.0033 and costs 1-2.4ms to choose. The document's own failure test
 applies: the surrogate is mis-specified, not under-optimised. Static,
 query-independent information does not predict which entries recover a query's
@@ -160,7 +160,7 @@ the whole multi-entry argument needed, and it reframes the problem:
 CAGRA's expensive optimisation step is, measured this way, largely a
 fragmentation repair.
 
-Splitting the loss (`bench/fragments.py`, cheap graph, single seed m=64):
+Splitting the loss (`bench/fragments.py`, cheap graph, single seed L=64):
 
 | queries | recall@10 | fragments reached | recall *inside* reached fragments |
 |---|---|---|---|
@@ -188,7 +188,7 @@ expansion against 28.1 for split branches, tested); taking turns stops the
 nearest seed's basin from eating the budget, which is the only reason the extra
 seeds were there.
 
-Both halves are necessary (cheap graph, P=512, m=64, 128 expansions):
+Both halves are necessary (cheap graph, P=512, L=64, 128 expansions):
 
 | structure | recall@10 | total ms | fragments reached |
 |---|---|---|---|
@@ -220,15 +220,15 @@ Selection cost included, matched recall, 3490 val queries. `>1x` is ours faster:
 
 | ours | recall@10 | ours ms | CAGRA ms | |
 |---|---|---|---|---|
-| S=1, m=64 (the old best) | 0.9635 | 19.61 | 21.28 | 1.09x |
-| S=8, m=64, B=64 | 0.9662 | 18.45 | 23.34 | 1.26x |
-| S=8, m=64 | 0.9718 | 20.93 | 28.41 | **1.36x** |
-| S=8, m=96 | 0.9807 | 30.97 | 37.87 | 1.22x |
-| S=8, m=128 | 0.9854 | 38.09 | 48.55 | 1.27x |
-| S=32, m=128 | 0.9871 | 40.37 | 53.51 | 1.33x |
+| V=1, L=64 (the old best) | 0.9635 | 19.61 | 21.28 | 1.09x |
+| V=8, L=64, B=64 | 0.9662 | 18.45 | 23.34 | 1.26x |
+| V=8, L=64 | 0.9718 | 20.93 | 28.41 | **1.36x** |
+| V=8, L=96 | 0.9807 | 30.97 | 37.87 | 1.22x |
+| V=8, L=128 | 0.9854 | 38.09 | 48.55 | 1.27x |
+| V=32, L=128 | 0.9871 | 40.37 | 53.51 | 1.33x |
 
 1.22-1.36x across the whole 0.966-0.987 band, against 1.09x before. The search
-also **stops by itself**: at S=8, m=64 the queue runs out of unexpanded
+also **stops by itself**: at V=8, L=64 the queue runs out of unexpanded
 candidates at ~96 expansions, so budgets of 128, 192, 256 and 384 all return the
 same answer in the same time. The binding constraint is queue width, never the
 budget.
@@ -236,7 +236,7 @@ budget.
 ### Dropping CAGRA: not yet earned
 
 On the cheap exact-kNN graph the same method reaches 0.9337 / 0.9483 / 0.9572 at
-m=64/96/128 (19.8 / 26.6 / 34.1 ms) and cannot reach 0.97 within the queue
+L=64/96/128 (19.8 / 26.6 / 34.1 ms) and cannot reach 0.97 within the queue
 ceiling at all. Build is 0.92s against CAGRA's 4.85s at 100K, so for this corpus
 the cheap graph is ahead on *total* cost until roughly a million queries have
 been served -- and behind forever after that. Exact kNN is also O(N^2) and stops
@@ -262,9 +262,9 @@ graph, at matched recall:
 
 | ours, on our graph | recall@10 | ours ms | CAGRA ms | |
 |---|---|---|---|---|
-| S=8, m=64 | 0.9679 | 20.27 | 24.80 | 1.22x |
-| S=8, m=96 | 0.9778 | 26.77 | 33.16 | 1.24x |
-| S=8, m=128 | 0.9835 | 33.93 | 43.25 | 1.27x |
+| V=8, L=64 | 0.9679 | 20.27 | 24.80 | 1.22x |
+| V=8, L=96 | 0.9778 | 26.77 | 33.16 | 1.24x |
+| V=8, L=128 | 0.9835 | 33.93 | 43.25 | 1.27x |
 
 Which is the same 1.22-1.27x the CAGRA graph gave us. **The cuVS dependency is
 gone from the query side at no cost**; what it still buys is a build 8x faster,
@@ -317,7 +317,7 @@ alpha for the prune was swept: 1.0 gives 2.704, **1.2 gives 1.479**, 1.5 gives
 2.011, 2.0 gives 2.206 (at 2.0 almost nothing is pruned and it is a kNN graph
 again). 1.2 was already the default and is the right one.
 
-**The search is at the memory roofline.** At fp32, m=128: 3938 distances/query
+**The search is at the memory roofline.** At fp32, L=128: 3938 distances/query
 is 52.4 GiB of vector reads for the batch in 31.9ms = **1.76 TB/s**, on a part
 whose HBM is about 1.8. Kernel-level work cannot help from there, and measurement
 agreed: team size 8/16/32 differ by 2%, and replacing the serial merge with a
@@ -331,9 +331,9 @@ with both sides on fp16 the result flips:
 
 | ours (fp16, our graph) | recall@10 | ours ms | CAGRA fp16 ms | |
 |---|---|---|---|---|
-| m=128, S=8 | 0.9852 | 20.98 | 12.70 | 0.61x |
-| m=96, S=8 | 0.9800 | 16.87 | 10.00 | 0.59x |
-| m=64, S=8 | 0.9707 | 12.97 | 7.47 | 0.58x |
+| L=128, V=8 | 0.9852 | 20.98 | 12.70 | 0.61x |
+| L=96, V=8 | 0.9800 | 16.87 | 10.00 | 0.59x |
+| L=64, V=8 | 0.9707 | 12.97 | 7.47 | 0.58x |
 
 **So the earlier 1.22-1.36x was an artefact of CAGRA's fp32 path, not a win.**
 At the precision anyone would actually serve, native CAGRA is about 1.6x ahead of
@@ -344,7 +344,7 @@ The gap decomposes: we run the search at ~1.65 TB/s and CAGRA would need 2.45
 TB/s to do our distance count in its time, so it is doing roughly a third fewer
 distance evaluations as well as moving bytes better. Ours stops only when the
 queue holds no unexpanded candidate, which is thorough and late -- the budget
-sweep at m=128 shows the tail is expensive (0.9770 at 2975 distances, 0.9854 at
+sweep at L=128 shows the tail is expensive (0.9770 at 2975 distances, 0.9854 at
 3843) and that budget, not queue width, is the real knob.
 
 **On a global distance cache** (superseded -- see the latency section below;
@@ -394,7 +394,7 @@ unexpanded candidate is the first one the turn-scan already finds -- and the
 reference implements it too, so the tests still assert bitwise agreement (11/11).
 
 `eps` is the travel allowance, and it is measured rather than guessed
-(m=128, S=4, fp16):
+(L=128, V=4, fp16):
 
 | eps | recall@10 | distances/query | total ms |
 |---|---|---|---|
@@ -406,7 +406,7 @@ reference implements it too, so the tests still assert bitwise agreement (11/11)
 
 **What it does not do.** eps=0.10 removes 34% of the distance work, but at the
 recall it lands on, simply running a narrower queue to exhaustion costs the same
-(m=96 reaches 0.9800 in 16.87ms against 0.9803 in 16.43ms). The rule is worth
+(L=96 reaches 0.9800 in 16.87ms against 0.9803 in 16.43ms). The rule is worth
 having -- eps=0.15 is 11% fewer distances for 0.0003 recall, and it is free --
 but it does not move the Pareto, and the measurement says why: the tail is
 travel, travel needs slack, and slack is what stops the rule from firing.
@@ -414,7 +414,7 @@ travel, travel needs slack, and slack is what stops the rule from firing.
 The oracle spends 36 expansions where we spend 131, and no radius or idle rule
 comes near it. That gap is not a stopping problem. It is an arrival problem: a
 search that started *inside* the far fragment would not need to travel to it, and
-the entry oracle (0.9996 at E=8) says such entries are in the pool. Denser
+the entry oracle (0.9996 at V=8) says such entries are in the pool. Denser
 catalogs move in that direction and cost scanning time to do it -- P=16384 raises
 recall to 0.9883 from 0.9857 and spends 3.5ms of flat fp32 scan to get there,
 which a two-level catalog should mostly remove.
@@ -423,13 +423,13 @@ which a two-level catalog should mostly remove.
 
 Every number above this section was measured at Q=3490, where the GPU is already
 saturated and an extra branch costs its own work in wall time. A single query
-saturates nothing: one CTA per branch means E=100 branches occupy 100 of 188 SMs
+saturates nothing: one CTA per branch means V=100 branches occupy 100 of 188 SMs
 and run at the same time as one does. `bench/latency.py` measures that axis.
 
 | config | Q=1 | Q=8 | Q=64 | Q=256 | Q=1024 |
 |---|---|---|---|---|---|
-| shared state, S=8, m=128 | 1.71ms | 5.92 | 7.95 | 9.24 | **9.99** |
-| **split branches, E=100, m=16, B=16** | **0.63** | **0.89** | **2.91** | 9.17 | 34.0 |
+| shared state, V=8, L=128 | 1.71ms | 5.92 | 7.95 | 9.24 | **9.99** |
+| **split branches, V=100, L=16, B=16** | **0.63** | **0.89** | **2.91** | 9.17 | 34.0 |
 
 The crossover is near Q=256. Below it wide fan-out wins outright -- at Q=64 it is
 2.7x faster *and* more accurate (0.9953 against 0.9938). The design the batch
@@ -437,9 +437,9 @@ benchmarks rejected is the right one for interactive latency, and the earlier
 conclusion that "multi-entry is dominated" holds only in the saturated regime
 those benchmarks measured.
 
-E is a clean knob there (Q=64, scattered entries): E=32/100/200/400 gives
+E is a clean knob there (Q=64, scattered entries): V=32/100/200/400 gives
 0.9828/0.9922/0.9953/0.9969 at 1.29/3.18/5.34/9.81 ms. Entry placement still
-barely matters -- at E=100 the nearest-100 reach 0.9953, maximally spread and
+barely matters -- at V=100 the nearest-100 reach 0.9953, maximally spread and
 random both 0.9922.
 
 ### But CAGRA already does this, and does it better
@@ -447,15 +447,15 @@ random both 0.9922.
 | Q=64, matched recall | ours | native CAGRA multi_cta |
 |---|---|---|
 | 0.9953 | 2.96ms | ~0.74ms |
-| 0.9969 | 9.81ms (E=400) | 0.79ms (itopk 256) |
+| 0.9969 | 9.81ms (V=400) | 0.79ms (itopk 256) |
 
 `multi_cta` *is* the many-CTAs-per-query mode, so the idea is right and the
 implementation is 4-12x behind. The cause is measurable and specific:
 
 | config (Q=64) | distance evals/query | distinct nodes touched | redundancy |
 |---|---|---|---|
-| E=100 split branches | 71,963 | 8,826 | **8.2x** |
-| shared state, S=8 | 4,234 | 4,234 | 1.0x |
+| V=100 split branches | 71,963 | 8,826 | **8.2x** |
+| shared state, V=8 | 4,234 | 4,234 | 1.0x |
 
 A hundred independent branches re-evaluate each other's nodes eight times over.
 Which makes the global distance cache -- a per-query visited/distance table
@@ -479,11 +479,11 @@ just recomputes -- and `test_shared_cache_is_free_of_consequence` asserts that
 the whole search comes out identical with the cache on, with only the distance
 count moving (12/12).
 
-| Q=64, E=100 branches, m=16, B=16 | recall@10 | distances/query | p50 |
+| Q=64, V=100 branches, L=16, B=16 | recall@10 | distances/query | p50 |
 |---|---|---|---|
 | no cache | 0.9953 | 71,963 | 3.06ms |
 | **shared cache** | **0.9953** | **10,212** | **2.51ms** |
-| (shared state, S=8, m=128, for scale) | 0.9938 | 4,234 | 7.95ms |
+| (shared state, V=8, L=128, for scale) | 0.9938 | 4,234 | 7.95ms |
 
 86% of the distance work is gone and 18% of the time with it; at Q=256 it is 24%
 (9.70 to 7.33ms). The gap between those two numbers is the finding: **after the
@@ -492,7 +492,7 @@ on.** A budget sweep separates it -- 0.28ms before any expansion happens, then
 about 0.14ms per expansion across 6400 CTAs -- and the remainder is spread across
 graph reads, two hash probes per neighbour, the candidate sort and the merge,
 with no single dominant term. Narrowing the bitonic sort from a fixed 128 slots
-to `next_pow2(deg)` (21 stages instead of 28) and sizing the cache for the
+to `next_pow2(D)` (21 stages instead of 28) and sizing the cache for the
 overlap that actually occurs rather than the worst case both landed inside the
 noise, which is the same message.
 
@@ -512,14 +512,14 @@ memory, that every CTA of that query takes its next expansion from.
 
 The distance cache stopped branches recomputing each other's arithmetic; it did
 not stop them *searching* places the answer had already passed. A branch tests
-its frontier against a radius, and with m=16 its own radius comes from sixteen
+its frontier against a radius, and with L=16 its own radius comes from sixteen
 slots and is far too loose to cut anything. So the radius becomes a property of
 the query rather than of the branch: one `bound[q]` holding the best k-th
 distance any of its CTAs has reached, updated by `atomicMin` on the bit pattern
 (distances are non-negative, so integer order is float order) and read by every
 branch when it decides whether to keep expanding.
 
-Measured at Q=64, E=100, m=16, fp16, recall 0.9953 throughout:
+Measured at Q=64, V=100, L=16, fp16, recall 0.9953 throughout:
 
 | | p50 |
 |---|---|
@@ -581,13 +581,13 @@ timed in-process, warm, best of three.
 
 | ours | recall@10 | QPS | CAGRA at the same recall | |
 |---|---|---|---|---|
-| m=32 | 0.9412 | 241,683 | 15.17ms | 1.06x |
-| m=48 | 0.9623 | 191,927 | 21.33ms | 1.17x |
-| m=64 | 0.9711 | 160,446 | 28.27ms | 1.30x |
-| m=96 | 0.9815 | 125,008 | 39.99ms | 1.43x |
-| m=128 | 0.9861 | 103,297 | 50.88ms | 1.51x |
-| m=192, P=16k | 0.9922 | 67,667 | 74.31ms | 1.44x |
-| m=256, P=16k | 0.9947 | 56,501 | 97.15ms | **1.57x** |
+| L=32 | 0.9412 | 241,683 | 15.17ms | 1.06x |
+| L=48 | 0.9623 | 191,927 | 21.33ms | 1.17x |
+| L=64 | 0.9711 | 160,446 | 28.27ms | 1.30x |
+| L=96 | 0.9815 | 125,008 | 39.99ms | 1.43x |
+| L=128 | 0.9861 | 103,297 | 50.88ms | 1.51x |
+| L=192, P=16k | 0.9922 | 67,667 | 74.31ms | 1.44x |
+| L=256, P=16k | 0.9947 | 56,501 | 97.15ms | **1.57x** |
 
 The advantage grows with recall: a tie at 0.94, half again as fast from 0.986 up.
 The queue ceiling is 256; the catalog scan at P=16384 is 3.5ms of flat fp32 and
@@ -609,12 +609,12 @@ rather than difficulty -- it reverses the result if you let it.
 
 | ours | hard@10 | all@10 | QPS | CAGRA at the same hard@10 | |
 |---|---|---|---|---|---|
-| m=32 | 0.7556 | 0.9412 | 243,634 | 17.07ms | 1.19x |
-| m=48 | 0.8178 | 0.9623 | 191,036 | 24.42ms | 1.34x |
-| m=64 | 0.8564 | 0.9711 | 161,776 | 31.31ms | 1.45x |
-| m=96 | 0.9026 | 0.9815 | 125,531 | 42.42ms | 1.53x |
-| m=128, S=16, P=16k | 0.9341 | 0.9883 | 95,593 | 57.37ms | 1.57x |
-| m=256, P=16k | 0.9702 | 0.9947 | 56,501 | 99.82ms | **1.62x** |
+| L=32 | 0.7556 | 0.9412 | 243,634 | 17.07ms | 1.19x |
+| L=48 | 0.8178 | 0.9623 | 191,036 | 24.42ms | 1.34x |
+| L=64 | 0.8564 | 0.9711 | 161,776 | 31.31ms | 1.45x |
+| L=96 | 0.9026 | 0.9815 | 125,531 | 42.42ms | 1.53x |
+| L=128, V=16, P=16k | 0.9341 | 0.9883 | 95,593 | 57.37ms | 1.57x |
+| L=256, P=16k | 0.9702 | 0.9947 | 56,501 | 99.82ms | **1.62x** |
 
 Measured by what a search actually recovers, the hard decile *is* where the
 advantage is a little larger: 1.19-1.62x against 1.02-1.57x on all queries, and
@@ -680,7 +680,7 @@ Two questions settled together, because the answer to one explains the other.
 
 **Does scanning the catalog earn its keep, or should entries just be scattered?**
 It earns it, but not by buying recall -- by buying a cheaper search
-(MS MARCO, m=128, S=8):
+(MS MARCO, L=128, V=8):
 
 | | recall@10 | select | search | total | distances/query |
 |---|---|---|---|---|---|
@@ -688,18 +688,18 @@ It earns it, but not by buying recall -- by buying a cheaper search
 | random pool entries (free) | 0.9853 | 0.00 | 39.97 | 39.97 | 3,930 |
 
 0.93ms spent returns 2.8ms. In the fan-out regime it matters far more --
-E=100 shallow branches cannot recover from bad starts: 0.9953 at 2.71ms against
+V=100 shallow branches cannot recover from bad starts: 0.9953 at 2.71ms against
 0.9859 at 3.27ms.
 
 **Would a hierarchy let a small queue do the job?** The upper bound settles it:
 hand the search the query's *exact* top-E and no mechanism can beat that.
 
-| m=32 | E=1 | E=2 | E=4 | E=8 |
+| L=32 | V=1 | V=2 | V=4 | V=8 |
 |---|---|---|---|---|
 | exact top-E as entries | 0.9291 | 0.9376 | 0.9528 | **0.9818** |
 | catalog, nearest of P=4096 | 0.9262 | 0.9326 | 0.9376 | 0.9412 |
 
-At E=1 the exact nearest neighbour is worth 0.003 over a pool node at rank 18,
+At V=1 the exact nearest neighbour is worth 0.003 over a pool node at rank 18,
 and a denser catalog (P=16384, rank ~6) is worth 0.006. **Proximity is worth
 almost nothing.** The whole gain appears as E grows, because the exact top-8
 contains one member of every fragment of the answer by construction.
@@ -756,7 +756,7 @@ knows which nodes have been taken; in **exclusive** mode a node another branch
 has claimed is skipped outright instead of being entered with its cached
 distance, and branches are pushed into ground nobody holds.
 
-| fan-out, E=32, m=16, B=16 | recall@10 | distances/query | total |
+| fan-out, V=32, L=16, B=16 | recall@10 | distances/query | total |
 |---|---|---|---|
 | shared cache | 0.9734 | 4,802 | 48.6ms |
 | **+ exclusive** | **0.9981** | 12,176 | 105.9ms |
@@ -768,7 +768,7 @@ place.
 The curve it traces (MS MARCO, test, fp32), against native CAGRA at matched
 recall:
 
-| E / B | recall@10 | QPS | vs CAGRA |
+| V / B | recall@10 | QPS | vs CAGRA |
 |---|---|---|---|
 | 8 / 8 | 0.9589 | 209,877 | 1.21x |
 | 16 / 8 | 0.9815 | 116,341 | 1.34x |
@@ -792,7 +792,7 @@ there first: over 6 runs the returned ids differed every time and recall moved b
 A hint worth more than a measurement: *the first correct answer arrives much
 sooner than ef suggests*. It does, and the waste is enormous:
 
-| E=32 branches, 16 expansions each, exclusive | |
+| V=32 branches, 16 expansions each, exclusive | |
 |---|---|
 | branches that ever hold a ground-truth document | 21.4% |
 | of those, hit on expansion 1 | **70.5%** |
@@ -806,9 +806,9 @@ is to let a branch *leave when it stops beating the query*, which the shared
 bound already knows, while exclusive territory keeps the ones still running out
 of each other's way.
 
-All three together (MS MARCO, test, fp32, m=16, nominal budget 16):
+All three together (MS MARCO, test, fp32, L=16, nominal budget 16):
 
-| E / eps | recall@10 | QPS | vs native CAGRA |
+| V / eps | recall@10 | QPS | vs native CAGRA |
 |---|---|---|---|
 | 16 / 0.02 | 0.9787 | 143,368 | |
 | 16 / 0.05 | 0.9890 | 101,844 | 1.71x |
@@ -887,7 +887,7 @@ call.
 6. **Arrival, directly.** 36% of fragments are still never reached at phi>=3 and
    the oracle says entries that reach them are in the pool. No query-independent
    rule finds them and neither does proximity or spread. B (probe then select) is
-   the untried source of signal; so is raising the queue ceiling past m=128,
+   the untried source of signal; so is raising the queue ceiling past L=128,
    which is currently where the recall curve ends.
 7. C (fused greedy) stays on hold: it makes selection cheaper, and selection is
    not where anything is lost.

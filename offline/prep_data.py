@@ -25,6 +25,33 @@ DEFAULT_OUT = Path(os.environ.get("GPUANN_DATA", "/dev/shm/gpuann"))
 SYN_EMB = Path(os.environ.get("SYN_EMB_DIR", "/workspace/SYN/emb"))
 
 
+def exact_topk_l2(Qv, X, k, device="cuda", qchunk=1024, dchunk=200_000):
+    """Exact top-k by squared L2, for corpora that are not normalised.
+
+    ||q-x||^2 = ||q||^2 - 2<q,x> + ||x||^2, and ||q||^2 is constant within a
+    query, so ranking on ||x||^2 - 2<q,x> is the same ordering and costs one
+    matmul -- the same one the inner-product path already does.
+    """
+    nq, n = Qv.shape[0], X.shape[0]
+    Qg = torch.from_numpy(Qv).to(device)
+    bv = torch.full((nq, k), float("inf"), device=device)
+    bi = torch.zeros((nq, k), dtype=torch.int64, device=device)
+    for s in range(0, n, dchunk):
+        e = min(s + dchunk, n)
+        Xg = torch.from_numpy(np.ascontiguousarray(X[s:e])).to(device)
+        xn = (Xg * Xg).sum(1)
+        for qs in range(0, nq, qchunk):
+            qe = min(qs + qchunk, nq)
+            sc = xn.view(1, -1) - 2.0 * (Qg[qs:qe] @ Xg.T)
+            v, i = torch.topk(sc, min(k, e - s), dim=1, largest=False)
+            cv = torch.cat([bv[qs:qe], v], 1)
+            ci = torch.cat([bi[qs:qe], i + s], 1)
+            v2, p = torch.topk(cv, k, dim=1, largest=False)
+            bv[qs:qe], bi[qs:qe] = v2, torch.gather(ci, 1, p)
+        del Xg
+    return bi.cpu().numpy().astype(np.int32), bv.cpu().numpy()
+
+
 def exact_topk(Qv, X, k, device="cuda", qchunk=1024, dchunk=200_000):
     """fp32 exhaustive inner-product top-k. The ruler is at least as precise as
     the thing it measures, so it is never computed in fp16."""

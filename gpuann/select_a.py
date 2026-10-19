@@ -20,6 +20,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from .engine import METRIC_IP, METRIC_L2   # noqa: F401
+
 INF = float("inf")
 
 
@@ -29,10 +31,18 @@ def unpack_mask(mask_u32: np.ndarray, R: int) -> np.ndarray:
     return bits.reshape(mask_u32.shape[0], -1)[:, :R].astype(bool)
 
 
-def catalog_scores(Qg, Xg, pool_t):
-    """Distance from every query to every pool entry. The cost of the catalog is
-    real and is timed with the selection, never outside it."""
-    return 1.0 - (Qg @ Xg[pool_t.long()].T)                      # [Q, P]
+def catalog_scores(Qg, Xg, pool_t, metric=METRIC_IP):
+    """Distance from every query to every pool entry, in the corpus's own metric.
+
+    Scoring an unnormalised L2 corpus by inner product picks entries by length
+    rather than by proximity, so the metric has to come along here too. The cost
+    of the catalog is real and is timed with the selection, never outside it.
+    """
+    V = Xg[pool_t.long()]
+    if metric == METRIC_IP:
+        return 1.0 - (Qg @ V.T)                                   # [Q, P]
+    return ((V * V).sum(1).view(1, -1) - 2.0 * (Qg @ V.T)
+            + (Qg * Qg).sum(1).view(-1, 1))
 
 
 def candidates(cat_dist, L=32, n_near=24, rng_seed=0):

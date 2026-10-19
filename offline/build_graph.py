@@ -42,18 +42,34 @@ import torch
 
 
 @torch.no_grad()
-def knn_candidates(Xg, C, chunk=4096):
-    """Exact top-C neighbours, self excluded."""
+def pairwise(A, B, metric, bn=None):
+    """Distances from every row of A to every row of B, in the corpus's metric.
+
+    An inner-product corpus is normalised, so 1 - <a,b> is a distance; an L2 one
+    is not, and ranking it by inner product sorts by length instead of by
+    proximity -- which on GIST left almost every node with out-degree one.
+    """
+    if metric == "ip":
+        return 1.0 - (A @ B.T)
+    if bn is None:
+        bn = (B * B).sum(1)
+    return (bn.view(1, -1) - 2.0 * (A @ B.T) + (A * A).sum(1).view(-1, 1)).clamp(min=0)
+
+
+@torch.no_grad()
+def knn_candidates(Xg, C, chunk=4096, metric="ip"):
+    """Exact top-C neighbours by the corpus's metric, self excluded."""
     n = Xg.shape[0]
     idx = torch.empty((n, C), dtype=torch.int32, device=Xg.device)
     dst = torch.empty((n, C), dtype=torch.float32, device=Xg.device)
+    xn = None if metric == "ip" else (Xg * Xg).sum(1)
     for s in range(0, n, chunk):
         e = min(s + chunk, n)
-        sim = Xg[s:e] @ Xg.T
-        sim[torch.arange(e - s, device=Xg.device), torch.arange(s, e, device=Xg.device)] = -3.4e38
-        v, i = torch.topk(sim, C, dim=1)
-        idx[s:e], dst[s:e] = i.to(torch.int32), 1.0 - v
-        del sim
+        d = pairwise(Xg[s:e], Xg, metric, xn)
+        d[torch.arange(e - s, device=Xg.device), torch.arange(s, e, device=Xg.device)] = 3.4e38
+        v, i = torch.topk(d, C, dim=1, largest=False)
+        idx[s:e], dst[s:e] = i.to(torch.int32), v
+        del d
     return idx, dst
 
 
@@ -68,7 +84,7 @@ def lid_mle(cdist, k=50, eps=1e-12):
     A node whose neighbours are all at nearly the same distance has a ratio near
     1, a log near 0, and a large LID -- which is the case this is here to find.
     """
-    d = torch.sqrt(torch.clamp(2.0 * cdist[:, :k], min=0.0))
+    d = torch.sqrt(torch.clamp(cdist[:, :k], min=0.0))
     dk = d[:, -1:].clamp(min=eps)
     r = torch.log((d[:, :-1].clamp(min=eps) / dk).clamp(max=1.0 - 1e-7))
     return (-1.0 / r.mean(dim=1).clamp(max=-eps))
@@ -99,7 +115,8 @@ def degrees_from_lid(lid, deg, lo_frac=0.5, hi_frac=1.5, dmin=8):
 
 
 @torch.no_grad()
-def robust_prune(Xg, cand, cdist, deg, alpha=1.2, chunk=4096, deg_per_node=None):
+def robust_prune(Xg, cand, cdist, deg, alpha=1.2, chunk=4096, deg_per_node=None,
+                 metric="ip"):
     """Keep a candidate only when no nearer kept neighbour detours to it.
 
     Vectorised over nodes and sequential over the candidate list, which is the
@@ -114,7 +131,12 @@ def robust_prune(Xg, cand, cdist, deg, alpha=1.2, chunk=4096, deg_per_node=None)
         e = min(s + chunk, n)
         B = e - s
         V = Xg[cand[s:e].reshape(-1).long()].reshape(B, C, -1)        # [B, C, D]
-        pair = 1.0 - torch.bmm(V, V.transpose(1, 2))                  # [B, C, C]
+        if metric == "ip":
+            pair = 1.0 - torch.bmm(V, V.transpose(1, 2))              # [B, C, C]
+        else:
+            vn = (V * V).sum(-1)
+            pair = (vn.unsqueeze(1) - 2.0 * torch.bmm(V, V.transpose(1, 2))
+                    + vn.unsqueeze(2)).clamp(min=0)
         du = cdist[s:e]                                               # [B, C]
         kept = torch.zeros((B, C), dtype=torch.bool, device=Xg.device)
         nkept = torch.zeros(B, dtype=torch.long, device=Xg.device)
@@ -138,7 +160,8 @@ def robust_prune(Xg, cand, cdist, deg, alpha=1.2, chunk=4096, deg_per_node=None)
 
 
 @torch.no_grad()
-def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None):
+def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None,
+                metric="ip"):
     """Offer every edge back to its target, then re-prune the union per node."""
     n = G.shape[0]
     src = torch.arange(n, device=G.device, dtype=torch.int32).view(-1, 1).expand_as(G)
@@ -174,7 +197,10 @@ def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None)
         valid = srt < 2 ** 30
         ids = torch.where(valid, srt, torch.zeros_like(srt))
         V = Xg[ids.reshape(-1)].reshape(B, -1, Xg.shape[1])
-        d = 1.0 - torch.bmm(V, Xg[s:e].unsqueeze(-1)).squeeze(-1)
+        if metric == "ip":
+            d = 1.0 - torch.bmm(V, Xg[s:e].unsqueeze(-1)).squeeze(-1)
+        else:
+            d = ((V - Xg[s:e].unsqueeze(1)) ** 2).sum(-1)
         d = torch.where(valid, d, torch.full_like(d, float("inf")))
         o = torch.argsort(d, dim=1)
         cand = torch.gather(ids.to(torch.int32), 1, o)
@@ -182,7 +208,7 @@ def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None)
         keepn = min(cand.shape[1], 128)
         sub = None if deg_per_node is None else deg_per_node[s:e]
         kept = robust_prune(Xg, cand[:, :keepn].contiguous(), cdist[:, :keepn].contiguous(),
-                            deg, alpha=alpha, chunk=B, deg_per_node=sub)
+                            deg, alpha=alpha, chunk=B, deg_per_node=sub, metric=metric)
         # The inner call sizes its output by the widest degree *in this chunk*,
         # which under LID allocation need not be the widest in the corpus; the
         # rest of the row stays -1.
@@ -194,25 +220,29 @@ def add_reverse(Xg, G, deg, chunk=2048, alpha=1.2, max_in=64, deg_per_node=None)
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", type=Path, default=Path("/dev/shm/gpuann/msmarco-1m-100k"))
-    ap.add_argument("--deg", type=int, default=64)
+    ap.add_argument("--D", type=int, default=64, help="target graph out-degree")
     ap.add_argument("--cand", type=int, default=128)
     ap.add_argument("--alpha", type=float, default=1.2)
     ap.add_argument("--lid", action="store_true", help="allocate degree by LID rank")
     ap.add_argument("--lid-k", type=int, default=50)
     ap.add_argument("--lid-lo", type=float, default=0.5)
     ap.add_argument("--lid-hi", type=float, default=1.5)
+    ap.add_argument("--metric", default=None, choices=["ip", "l2"],
+                    help="default: read it from the corpus manifest")
     ap.add_argument("--out", default="G_ours.npy")
     a = ap.parse_args()
 
+    man = json.loads((a.data / "manifest.json").read_text())
+    metric = a.metric or ("ip" if man["metric"].startswith("ip") else "l2")
     X = np.load(a.data / "X.npy")
     Xg = torch.from_numpy(X).cuda()
     torch.cuda.synchronize(); t0 = time.perf_counter()
-    cand, cdist = knn_candidates(Xg, a.cand)
+    cand, cdist = knn_candidates(Xg, a.cand, metric=metric)
     torch.cuda.synchronize(); t1 = time.perf_counter()
     dpn = lid = None
     if a.lid:
         lid = lid_mle(cdist, k=a.lid_k)
-        dpn = degrees_from_lid(lid, a.deg, a.lid_lo, a.lid_hi)
+        dpn = degrees_from_lid(lid, a.D, a.lid_lo, a.lid_hi)
         # The mean-pinning pass hands its rounding slack to the highest-LID nodes
         # and can push the widest degree past what the candidate list and the
         # kernel allow. Clamp there; the mean drops by whatever that costs.
@@ -220,9 +250,9 @@ def main():
         q = torch.quantile(lid, torch.tensor([0.05, 0.5, 0.95], device=lid.device))
         print(f"LID: 5%/median/95% {q[0]:.1f}/{q[1]:.1f}/{q[2]:.1f}   "
               f"degree {int(dpn.min())}..{int(dpn.max())}, mean {float(dpn.float().mean()):.1f}")
-    G = robust_prune(Xg, cand, cdist, a.deg, alpha=a.alpha, deg_per_node=dpn)
+    G = robust_prune(Xg, cand, cdist, a.D, alpha=a.alpha, deg_per_node=dpn, metric=metric)
     torch.cuda.synchronize(); t2 = time.perf_counter()
-    G = add_reverse(Xg, G, a.deg, alpha=a.alpha, deg_per_node=dpn)
+    G = add_reverse(Xg, G, a.D, alpha=a.alpha, deg_per_node=dpn, metric=metric)
     torch.cuda.synchronize(); t3 = time.perf_counter()
 
     Gc = G.cpu().numpy().astype(np.int32)
@@ -235,7 +265,7 @@ def main():
     if lid is not None:
         np.save(a.data / (Path(a.out).stem + "_lid.npy"), lid.cpu().numpy().astype(np.float32))
     (a.data / (Path(a.out).stem + ".json")).write_text(json.dumps(
-        dict(deg=a.deg, cand=a.cand, alpha=a.alpha, lid=bool(a.lid),
+        dict(deg=a.D, cand=a.cand, alpha=a.alpha, metric=metric, lid=bool(a.lid),
              lid_range=[a.lid_lo, a.lid_hi], seconds=round(t3 - t0, 2),
              stage_seconds=dict(candidates=round(t1 - t0, 2), prune=round(t2 - t1, 2),
                                 reverse=round(t3 - t2, 2))), indent=2))

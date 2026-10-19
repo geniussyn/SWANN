@@ -87,7 +87,7 @@ def main():
     for r in sorted(ours, key=lambda x: (rec(x) is None, rec(x))):
         if rec(r) is None:
             continue
-        name = f"m={r['m']:<3d} S={r['E']:<3d} {r['arm']}"
+        name = f"L={r.get('L', r.get('m')):<3d} V={r['E']:<3d} {r['arm']}"
         t, mine = time_at(front, rec(r)), ms(r)
         if t is None:
             print(f"{name:26s} {rec(r):10.4f} {mine:7.2f} {'--':>9s} "

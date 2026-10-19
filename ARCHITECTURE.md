@@ -4,6 +4,22 @@ Every design choice named here was settled by a measurement, and the number that
 settled it is quoted next to it. `README.md` has the full tables; this file is
 the structure and the reasoning.
 
+## 0. Names
+
+Four knobs carry the search, and they are named the same in the kernel, the
+Python API, the benchmark flags and here:
+
+| | meaning | typical |
+|---|---|---|
+| **V** | entries per query — branches when they are independent, lineages when they share a state | 16-64 |
+| **L** | queue width: how many evaluated nodes a branch keeps alive | 16 (fan-out), 64-256 (shared) |
+| **D** | graph out-degree, the index's edge budget | 32-96 |
+| **B** | expansion budget per branch | 16 (nominal; `eps` usually stops it sooner) |
+
+`eps`, the retirement slack, is the fifth and the only one ever tuned.
+
+In the kernel the vector dimension is `dim`, because `D` is the degree.
+
 ---
 
 ## 1. The shape of the system
@@ -38,10 +54,10 @@ Per **(query, branch)**:
 
 | array | type | meaning |
 |---|---|---|
-| `ids` | int32 [Q,J,m] | queue: best-m evaluated so far, sorted by (distance, id) |
-| `dist` | float32 [Q,J,m] | their distances |
-| `expanded` | uint8 [Q,J,m] | whether each entry's neighbours have been walked |
-| `lineage` | uint8 [Q,J,m] | which seed this entry descends from |
+| `ids` | int32 [Q,J,L] | queue: best-m evaluated so far, sorted by (distance, id) |
+| `dist` | float32 [Q,J,L] | their distances |
+| `expanded` | uint8 [Q,J,L] | whether each entry's neighbours have been walked |
+| `lineage` | uint8 [Q,J,L] | which seed this entry descends from |
 | `visited` | int32 [Q,J,H] | open-addressed; keeps this branch's queue free of duplicates |
 | `counters` | int32 [Q,J,6] | expansions, distance evals, hash fails, exhausted, cache hits, claims |
 
@@ -54,7 +70,7 @@ Per **query**, shared by all of its branches:
 
 ### Invariants, stated once
 
-- the queue is **best-m over everything evaluated**, ordered by `(distance, id)`;
+- the queue is **best-L over everything evaluated**, ordered by `(distance, id)`;
   the expanded flag and the lineage travel with their entry through every merge;
 - a branch stops on **budget spent**, **no retained candidate unexpanded**, or
   **every lineage retired** — never because a round left the queue unchanged;
@@ -75,7 +91,7 @@ One CTA per (query, branch), 128 threads. Per expansion:
 2. **expand** — read `G[p]`; for each neighbour the branch's `visited` decides
    whether it is new to this queue, and the query's cache decides whether its
    distance has to be computed at all.
-3. **sort** the `next_pow2(deg)` candidate slots by `(distance, id)`, bitonic.
+3. **sort** the `next_pow2(D)` candidate slots by `(distance, id)`, bitonic.
 4. **merge** the two sorted runs into the best m, one output slot per thread by
    merge-path binary search.
 
@@ -108,7 +124,7 @@ the **query**, not the branch — `bound[q]`, updated by `atomicMin` on the floa
 bit pattern, since distances are non-negative and integer order is float order.
 
 A branch with a 16-slot queue cannot tell that it is wasting its time; the query
-can. Measured at Q=64, E=100, recall 0.9953: 2.53ms using the branch's own
+can. Measured at Q=64, V=100, recall 0.9953: 2.53ms using the branch's own
 radius, **1.95ms** using the shared one.
 
 `eps` is a **travel allowance**, not a tolerance. The tail of a search is arrival
@@ -121,7 +137,7 @@ documents.
 A distance belongs to a (query, node) pair, not to a branch. The per-branch
 `visited` still keeps each queue unique; the arithmetic goes through a per-query
 table in L2, volatile, claimed with `atomicCAS`, probed for a bounded 32 steps.
-At Q=64, E=100 it removes 86% of the distance work (71,963 → 10,212).
+At Q=64, V=100 it removes 86% of the distance work (71,963 → 10,212).
 
 No CTA ever waits on another. Cross-CTA spinning on a GPU can deadlock, since
 co-residency is not guaranteed, so the probe gives up and recomputes instead.
@@ -138,7 +154,7 @@ of them — which is why coverage sketches, spread, MMR, catalog density and a
 pool hierarchy all returned nothing. The diversity has to come from the
 trajectories.
 
-At E=32 it takes recall 0.9734 → 0.9981 while the distance count goes **up** 2.5x,
+At V=32 it takes recall 0.9734 → 0.9981 while the distance count goes **up** 2.5x,
 which is the mechanism working: branches that cannot take the near nodes keep
 going outward instead of converging.
 
@@ -158,7 +174,7 @@ going outward instead of converging.
    degree covers less of it. varphi_2 1.539 → 1.479 at equal edge count.
 
 Degree is itself a recall–QPS knob and should not be matched to anyone else's:
-at E=32/eps=0.05, deg 32/48/64/80 gives 0.9684/0.9888/0.9946/0.9966 at
+at V=32/eps=0.05, deg 32/48/64/80 gives 0.9684/0.9888/0.9946/0.9966 at
 126k/82k/67k/60k QPS.
 
 ### 4.7 Entry selection
@@ -168,8 +184,8 @@ reach sketch, near-but-spread max-min, MMR with the trade-off swept, denser
 catalogs, a graph over the pool.
 
 The bound that explains it: hand the search the query's **exact top-E** and at
-E=1 that is worth 0.003 over a pool node at rank 18. **Proximity is worth almost
-nothing.** The whole gain appears as E grows (0.9818 at E=8 against 0.9412)
+V=1 that is worth 0.003 over a pool node at rank 18. **Proximity is worth almost
+nothing.** The whole gain appears as E grows (0.9818 at V=8 against 0.9412)
 because the exact top-8 contains one member of every fragment by construction —
 query-specific information no placement can supply.
 
@@ -200,7 +216,7 @@ is what makes one bit usable at all.
 - **ground truth is exact fp32**, recomputed here, never read from a file.
 - **val tunes, test reports.** Only `eps` was ever tuned, on val.
 - **matched recall**, always.
-- **batch size is part of the measurement.** Q×E CTAs against the SM count (188
+- **batch size is part of the measurement.** Q*V CTAs against the SM count (188
   here) decides whether extra parallelism is free; the crossover is near Q=256.
   A small subset measured as its own batch reports occupancy, not difficulty.
 - **nobody is held to anyone else's index size.** Each system sweeps its own
@@ -222,9 +238,9 @@ is what makes one bit usable at all.
 
 | | |
 |---|---|
-| queue width | m <= 256 (`MAXM`) |
-| graph degree | deg <= 128 (`MAXDEG` == block size; the candidate sort needs it) |
-| seeds per shared state | S <= 128 (init sort buffer), S <= 256 (lineage is uint8) |
+| queue width | L <= 256 (`MAXL`) |
+| graph degree | D <= 128 (`MAXD` == block size; the candidate sort needs it) |
+| entries per shared state | V <= 128 (init sort buffer), V <= 256 (lineage is uint8) |
 | branches (fan-out) | no kernel limit; memory, and Q*E against the SM count |
 | visited table | power of two, load factor <= 0.5, overflow raises |
 | distance cache | power of two; overflow recomputes rather than failing |

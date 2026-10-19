@@ -1,6 +1,6 @@
 // Common local-search engine for multi-entry graph ANN (stage 1 of the design).
 //
-// One CTA per (query, branch). Each branch owns an independent best-m queue, an
+// One CTA per (query, branch). Each branch owns an independent best-L queue, an
 // independent open-addressing visited table, and its own counters. The queue is
 // kept sorted ascending by the total order (distance, id), and the `expanded`
 // flag travels with its entry through every merge. A branch stops when its
@@ -11,7 +11,7 @@
 // delta=a then delta=b must equal running delta=a+b from the same init. That
 // equality is what stage 2's probe/resume depends on, and it is a test here.
 //
-// A branch may be seeded with S entries rather than one. They share the queue,
+// A branch may be seeded with V entries rather than one. They share the queue,
 // the visited table and the budget -- which is the point: independent branches
 // re-evaluate each other's nodes and each gets a budget too small to go deep,
 // and measurement says that costs more than the extra entries are worth. Each
@@ -30,8 +30,8 @@
 #include <float.h>
 
 #define BLOCK   128
-#define MAXM    256   // queue width ceiling (m <= MAXM)
-#define MAXDEG  128   // graph out-degree ceiling (deg <= MAXDEG), == BLOCK for the sort
+#define MAXL    256   // L, the queue width, may not exceed this
+#define MAXD    128   // D, the graph out-degree, may not exceed this (== BLOCK)
 #define NCTR    6     // [0] expansions, [1] distance evals, [2] hash failures,
                       // [3] exhausted, [4] cache hits, [5] cache slots claimed
 #define CPROBE  32    // bounded probe into the shared cache; a miss just recomputes
@@ -44,7 +44,7 @@
 // funnel into one basin, so diversity has to come from the trajectories rather
 // than from where they start.
 static const int POLICY_BEST = 0;          // always the nearest unexpanded candidate
-static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (step % S)
+static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (step % V)
 
 // Stopping. A lineage is retired when its own best unexpanded candidate lies
 // beyond (1 + stop_eps) times the current k-th best distance: nothing it can
@@ -171,14 +171,14 @@ __device__ __forceinline__ int cache_slot(int* table, int H, int key, int* claim
 template <int TEAM, typename XT>
 __device__ __forceinline__ float team_dist(const float* __restrict__ q,
                                            const XT* __restrict__ x,
-                                           int D, int metric, int lane, unsigned tmask) {
+                                           int dim, int metric, int lane, unsigned tmask) {
     constexpr int V = Vec<XT>::N;
     float acc = 0.f, buf[V];
-    for (int base = lane * V; base < D; base += TEAM * V) {
+    for (int base = lane * V; base < dim; base += TEAM * V) {
         load_vec<XT>(x + base, buf);
         #pragma unroll
         for (int i = 0; i < V; ++i) {
-            if (base + i >= D) break;
+            if (base + i >= dim) break;
             if (metric == METRIC_IP) acc += q[base + i] * buf[i];
             else { const float df = q[base + i] - buf[i]; acc += df * df; }
         }
@@ -190,7 +190,7 @@ __device__ __forceinline__ float team_dist(const float* __restrict__ q,
 
 // Sort the first `n` candidate slots by (distance, id); never-filled slots carry
 // FLT_MAX / -1 and land at the end. `n` is the smallest power of two covering the
-// graph's out-degree rather than MAXDEG: at deg 64 that is 21 compare-exchange
+// graph's out-degree rather than MAXD: at D 64 that is 21 compare-exchange
 // stages instead of 28, and 21 barriers instead of 28, on every expansion. In a
 // wide fan-out -- many shallow branches -- that per-expansion fixed cost is what
 // the kernel is actually spending its time on.
@@ -220,42 +220,42 @@ __global__ void init_kernel(const XT* __restrict__ X,
                             const int*   __restrict__ seeds,
                             int* ids, float* dist, unsigned char* expd,
                             unsigned char* lin, int* visited, int* counters,
-                            int D, int J, int S, int m, int H, int metric) {
+                            int dim, int J, int V, int L, int H, int metric) {
     const int j = blockIdx.x, q = blockIdx.y;
     const int tid = threadIdx.x, team = tid / TEAM, lane = tid % TEAM, nteams = BLOCK / TEAM;
     const unsigned tmask = team_mask<TEAM>(tid);
-    extern __shared__ float sq[];                    // D floats: the query vector
+    extern __shared__ float sq[];                    // dim floats: the query vector
 
-    __shared__ int   c_id[MAXDEG];  __shared__ float c_d[MAXDEG];
-    __shared__ unsigned char c_l[MAXDEG];
+    __shared__ int   c_id[MAXD];  __shared__ float c_d[MAXD];
+    __shared__ unsigned char c_l[MAXD];
 
     const size_t bid = (size_t)q * J + j;
     int*  vis = visited  + bid * H;
     int*  ctr = counters + bid * NCTR;
-    int*  qid = ids      + bid * m;
-    float* qd = dist     + bid * m;
-    unsigned char* qe = expd + bid * m;
-    unsigned char* ql = lin  + bid * m;
+    int*  qid = ids      + bid * L;
+    float* qd = dist     + bid * L;
+    unsigned char* qe = expd + bid * L;
+    unsigned char* ql = lin  + bid * L;
 
-    for (int t = tid; t < D; t += BLOCK) sq[t] = Qv[(size_t)q * D + t];
+    for (int t = tid; t < dim; t += BLOCK) sq[t] = Qv[(size_t)q * dim + t];
     for (int t = tid; t < H; t += BLOCK) vis[t] = 0;
-    int nsort = 2; while (nsort < S && nsort < MAXDEG) nsort <<= 1;
+    int nsort = 2; while (nsort < V && nsort < MAXD) nsort <<= 1;
     for (int i = tid; i < nsort; i += BLOCK) { c_id[i] = -1; c_d[i] = FLT_MAX; c_l[i] = 0; }
     for (int i = tid; i < NCTR; i += BLOCK) ctr[i] = 0;
     __syncthreads();
 
     // Every seed is evaluated and inserted; a seed repeated inside one branch is
     // kept once, by the same visited table that dedups the search itself.
-    for (int base = 0; base < S; base += nteams) {
+    for (int base = 0; base < V; base += nteams) {
         const int si = base + team;
-        if (si < S) {
-            const int v = seeds[(bid * (size_t)S) + si];
+        if (si < V) {
+            const int v = seeds[(bid * (size_t)V) + si];
             if (v >= 0) {
                 int isnew = 0;
                 if (lane == 0) isnew = hash_insert(vis, H, v, &ctr[2]);
                 isnew = __shfl_sync(tmask, isnew, 0, TEAM);
                 if (isnew) {
-                    float d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
+                    float d = team_dist<TEAM, XT>(sq, X + (size_t)v * dim, dim, metric, lane, tmask);
                     if (lane == 0) {
                         c_id[si] = v; c_d[si] = d; c_l[si] = (unsigned char)si;
                         atomicAdd(&ctr[1], 1);
@@ -268,7 +268,7 @@ __global__ void init_kernel(const XT* __restrict__ X,
 
     bitonic_sort(c_id, c_d, c_l, tid, nsort);
 
-    for (int i = tid; i < m; i += BLOCK) {
+    for (int i = tid; i < L; i += BLOCK) {
         const bool ok = (i < nsort) && (c_id[i] >= 0);
         qid[i] = ok ? c_id[i] : -1;
         qd[i]  = ok ? c_d[i]  : FLT_MAX;
@@ -283,9 +283,9 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                                const float* __restrict__ Qv,
                                int* ids, float* dist, unsigned char* expd,
                                unsigned char* lin, int* visited, int* counters,
-                               int D, int deg, int J, int m, int H,
+                               int dim, int D, int J, int L, int H,
                                int metric, int delta, int max_expansions,
-                               int policy, int S, float stop_eps, int kstop,
+                               int policy, int V, float stop_eps, int kstop,
                                int* cache_id, float* cache_d, int Hc, float* bound,
                                int exclusive) {
     const int j = blockIdx.x, q = blockIdx.y;
@@ -294,33 +294,33 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     const unsigned tmask = team_mask<TEAM>(tid);
     extern __shared__ float sq[];
 
-    __shared__ int   s_id[MAXM];  __shared__ float s_d[MAXM];
-    __shared__ unsigned char s_e[MAXM], s_l[MAXM];
-    __shared__ int   n_id[MAXM];  __shared__ float n_d[MAXM];
-    __shared__ unsigned char n_e[MAXM], n_l[MAXM];
-    __shared__ int   c_id[MAXDEG]; __shared__ float c_d[MAXDEG];
-    __shared__ unsigned char c_l[MAXDEG];
+    __shared__ int   s_id[MAXL];  __shared__ float s_d[MAXL];
+    __shared__ unsigned char s_e[MAXL], s_l[MAXL];
+    __shared__ int   n_id[MAXL];  __shared__ float n_d[MAXL];
+    __shared__ unsigned char n_e[MAXL], n_l[MAXL];
+    __shared__ int   c_id[MAXD]; __shared__ float c_d[MAXD];
+    __shared__ unsigned char c_l[MAXD];
     __shared__ int   s_slot, s_p, s_plin;
-    // 256 lineage bits, because lineage is a uint8 and S may be up to 256. This
-    // was one 32-bit word, which silently shifted out of range for S > 32 -- the
-    // measurements at S = 32 sat exactly on that boundary.
+    // 256 lineage bits, because lineage is a uint8 and V may be up to 256. This
+    // was one 32-bit word, which silently shifted out of range for V > 32 -- the
+    // measurements at V = 32 sat exactly on that boundary.
     __shared__ unsigned s_retired[8];
 
     const size_t bid = (size_t)q * J + j;
     int*  vis = visited  + bid * H;
     int*  ctr = counters + bid * NCTR;
-    int*  qid = ids      + bid * m;
-    float* qd = dist     + bid * m;
-    unsigned char* qe = expd + bid * m;
-    unsigned char* ql = lin  + bid * m;
+    int*  qid = ids      + bid * L;
+    float* qd = dist     + bid * L;
+    unsigned char* qe = expd + bid * L;
+    unsigned char* ql = lin  + bid * L;
     int*   cid = (Hc > 0) ? cache_id + (size_t)q * Hc : nullptr;
     float* cdd = (Hc > 0) ? cache_d  + (size_t)q * Hc : nullptr;
 
-    for (int t = tid; t < D; t += BLOCK) sq[t] = Qv[(size_t)q * D + t];
-    for (int i = tid; i < m; i += BLOCK) {
+    for (int t = tid; t < dim; t += BLOCK) sq[t] = Qv[(size_t)q * dim + t];
+    for (int i = tid; i < L; i += BLOCK) {
         s_id[i] = qid[i]; s_d[i] = qd[i]; s_e[i] = qe[i]; s_l[i] = ql[i];
     }
-    int nsort = 2; while (nsort < deg && nsort < MAXDEG) nsort <<= 1;
+    int nsort = 2; while (nsort < D && nsort < MAXD) nsort <<= 1;
     // Retirement is re-derived every call rather than stored: it is a function
     // of the state, it is monotone, and a re-check costs no expansion.
     for (int i = tid; i < 8; i += BLOCK) s_retired[i] = 0u;
@@ -331,7 +331,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
         if (tid == 0) {
             s_slot = -1;
             const bool early = (stop_eps >= 0.f);
-            float radius = (kstop > 0 && kstop <= m && s_id[kstop - 1] >= 0)
+            float radius = (kstop > 0 && kstop <= L && s_id[kstop - 1] >= 0)
                            ? s_d[kstop - 1] : FLT_MAX;
             if (bound) {                      // what the whole query knows, not this branch
                 const float gb = ((volatile float*)bound)[q];
@@ -339,16 +339,16 @@ __global__ void advance_kernel(const XT* __restrict__ X,
             }
             const float limit = (radius == FLT_MAX) ? FLT_MAX : radius * (1.f + stop_eps);
 
-            if (policy == POLICY_ROUND_ROBIN && S > 1) {
+            if (policy == POLICY_ROUND_ROBIN && V > 1) {
                 // Each lineage gets its turn, so the nearest seed's basin cannot
                 // starve the others -- and a lineage that is done, or that can no
                 // longer reach anything good, gives its turns back instead of
                 // spending them.
-                for (int turn = 0; turn < S && s_slot < 0; ++turn) {
-                    const int want = (ctr[0] + turn) % S;
+                for (int turn = 0; turn < V && s_slot < 0; ++turn) {
+                    const int want = (ctr[0] + turn) % V;
                     if (s_retired[want >> 5] & (1u << (want & 31))) continue;
                     int found = -1;
-                    for (int i = 0; i < m; ++i)
+                    for (int i = 0; i < L; ++i)
                         if (s_id[i] >= 0 && s_e[i] == 0 && s_l[i] == want) { found = i; break; }
                     if (found < 0) { s_retired[want >> 5] |= (1u << (want & 31)); continue; }
                     if (early && s_d[found] > limit) {
@@ -357,11 +357,11 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                     s_slot = found;
                 }
                 if (s_slot < 0 && !early) {          // legacy fallback: global best
-                    for (int i = 0; i < m; ++i)
+                    for (int i = 0; i < L; ++i)
                         if (s_id[i] >= 0 && s_e[i] == 0) { s_slot = i; break; }
                 }
             } else {
-                for (int i = 0; i < m; ++i)
+                for (int i = 0; i < L; ++i)
                     if (s_id[i] >= 0 && s_e[i] == 0) {
                         if (!early || s_d[i] <= limit) s_slot = i;
                         break;
@@ -383,10 +383,10 @@ __global__ void advance_kernel(const XT* __restrict__ X,
 
         // Expand p. Candidate i keeps the fixed slot i of G[p], so which lane did
         // the work never changes the result, and it inherits p's lineage.
-        for (int base = 0; base < deg; base += nteams) {
+        for (int base = 0; base < D; base += nteams) {
             const int nidx = base + team;
-            if (nidx < deg) {
-                const int v = G[(size_t)p * deg + nidx];
+            if (nidx < D) {
+                const int v = G[(size_t)p * D + nidx];
                 if (v >= 0) {
                     int isnew = 0;
                     if (lane == 0) isnew = hash_insert(vis, H, v, &ctr[2]);
@@ -407,7 +407,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                             // somebody else owns this node; leave it to them
                             if (lane == 0) atomicAdd(&ctr[4], 1);
                         } else if (d == FLT_MAX) {               // not cached yet
-                            d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
+                            d = team_dist<TEAM, XT>(sq, X + (size_t)v * dim, dim, metric, lane, tmask);
                             if (lane == 0) {
                                 if (slot >= 0) { ((volatile float*)cdd)[slot] = d;
                                                  atomicAdd(&ctr[5], 1); }
@@ -428,15 +428,15 @@ __global__ void advance_kernel(const XT* __restrict__ X,
 
         bitonic_sort(c_id, c_d, c_l, tid, nsort);
 
-        // Two sorted runs -> best m, one output slot per thread.
+        // Two sorted runs -> best L, one output slot per thread.
         //
-        // The serial two-pointer merge this replaces ran up to m + deg steps in
+        // The serial two-pointer merge this replaces ran up to L + D steps in
         // thread 0 with the other 127 idle, every expansion. Merge-path instead:
         // output slot o is fed by exactly i elements of the queue and o - i of
-        // the candidates, and that i is found by a binary search of log(m) steps
+        // the candidates, and that i is found by a binary search of log(L) steps
         // that each thread can run on its own. Same output, same tie-break.
-        for (int o = tid; o < m; o += BLOCK) {
-            int lo = max(0, o - nsort), hi = min(o, m);
+        for (int o = tid; o < L; o += BLOCK) {
+            int lo = max(0, o - nsort), hi = min(o, L);
             while (lo < hi) {
                 const int i = (lo + hi) >> 1, j = o - i;
                 if (j > 0 && !lt(c_d[j - 1], c_id[j - 1], s_d[i], s_id[i])) lo = i + 1;
@@ -444,21 +444,21 @@ __global__ void advance_kernel(const XT* __restrict__ X,
             }
             const int i = lo, j = o - i;
             const bool takeA = (j >= nsort) ||
-                               (i < m && lt(s_d[i], s_id[i], c_d[j], c_id[j]));
+                               (i < L && lt(s_d[i], s_id[i], c_d[j], c_id[j]));
             if (takeA) { n_id[o] = s_id[i]; n_d[o] = s_d[i]; n_e[o] = s_e[i]; n_l[o] = s_l[i]; }
             else       { n_id[o] = c_id[j]; n_d[o] = c_d[j]; n_e[o] = 0;      n_l[o] = c_l[j]; }
             if (n_id[o] < 0) { n_d[o] = FLT_MAX; n_e[o] = 1; n_l[o] = 0; }   // canonical empty
         }
         __syncthreads();
-        for (int i = tid; i < m; i += BLOCK) {
+        for (int i = tid; i < L; i += BLOCK) {
             s_id[i] = n_id[i]; s_d[i] = n_d[i]; s_e[i] = n_e[i]; s_l[i] = n_l[i];
         }
-        if (bound && tid == 0 && kstop > 0 && kstop <= m && n_id[kstop - 1] >= 0)
+        if (bound && tid == 0 && kstop > 0 && kstop <= L && n_id[kstop - 1] >= 0)
             bound_min(bound + q, n_d[kstop - 1]);
         __syncthreads();
     }
 
-    for (int i = tid; i < m; i += BLOCK) {
+    for (int i = tid; i < L; i += BLOCK) {
         qid[i] = s_id[i]; qd[i] = s_d[i]; qe[i] = s_e[i]; ql[i] = s_l[i];
     }
 }
@@ -507,20 +507,20 @@ void init_states(torch::Tensor X, torch::Tensor Qv, torch::Tensor seeds,
                  int64_t metric, int64_t team_size) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
-    const int D = X.size(1), J = ids.size(1), m = ids.size(2), H = visited.size(2);
-    const int S = seeds.dim() == 3 ? (int)seeds.size(2) : 1;
-    TORCH_CHECK(S <= MAXDEG, "seeds per branch exceed MAXDEG (the init sort buffer)");
-    TORCH_CHECK(S <= 256, "seeds per branch exceed 256 (lineage is a uint8)");
-    TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
+    const int dim = X.size(1), J = ids.size(1), L = ids.size(2), H = visited.size(2);
+    const int V = seeds.dim() == 3 ? (int)seeds.size(2) : 1;
+    TORCH_CHECK(V <= MAXD, "seeds per branch exceed MAXD (the init sort buffer)");
+    TORCH_CHECK(V <= 256, "seeds per branch exceed 256 (lineage is a uint8)");
+    TORCH_CHECK(L <= MAXL, "L exceeds MAXL");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
     TORCH_CHECK(counters.size(2) == NCTR, "counters last dim must be NCTR");
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_TEAM(team_size, init_kernel, grid, D * sizeof(float), stream,
+    DISPATCH_TEAM(team_size, init_kernel, grid, dim * sizeof(float), stream,
                   X, Qv.data_ptr<float>(), seeds.data_ptr<int>(),
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
-                  D, J, S, m, H, (int)metric);
+                  dim, J, V, L, H, (int)metric);
     C10_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -528,17 +528,17 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
              torch::Tensor ids, torch::Tensor dist, torch::Tensor expd,
              torch::Tensor lin, torch::Tensor visited, torch::Tensor counters,
              int64_t metric, int64_t team_size, int64_t delta, int64_t max_expansions,
-             int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop,
+             int64_t policy, int64_t V_in, double stop_eps, int64_t kstop,
              torch::Tensor cache_id, torch::Tensor cache_d, torch::Tensor bound,
              int64_t exclusive) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     TORCH_CHECK(G.is_cuda() && G.scalar_type() == torch::kInt32 && G.is_contiguous(), "G: contiguous cuda int32");
-    const int D = X.size(1), deg = G.size(1);
-    const int J = ids.size(1), m = ids.size(2), H = visited.size(2);
-    TORCH_CHECK(deg <= MAXDEG, "graph degree exceeds MAXDEG");
-    TORCH_CHECK(nlineage <= 256, "lineage count exceeds 256 (lineage is a uint8)");
-    TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
+    const int dim = X.size(1), D = G.size(1);
+    const int J = ids.size(1), L = ids.size(2), H = visited.size(2);
+    TORCH_CHECK(D <= MAXD, "graph degree exceeds MAXD");
+    TORCH_CHECK(V_in <= 256, "lineage count exceeds 256 (lineage is a uint8)");
+    TORCH_CHECK(L <= MAXL, "L exceeds MAXL");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
     const int Hc = (cache_id.numel() > 0) ? (int)cache_id.size(1) : 0;
     if (Hc) {
@@ -549,12 +549,12 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
     }
     dim3 grid(J, ids.size(0));
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_TEAM(team_size, advance_kernel, grid, D * sizeof(float), stream,
+    DISPATCH_TEAM(team_size, advance_kernel, grid, dim * sizeof(float), stream,
                   X, G.data_ptr<int>(), Qv.data_ptr<float>(),
                   ids.data_ptr<int>(), dist.data_ptr<float>(), expd.data_ptr<unsigned char>(),
                   lin.data_ptr<unsigned char>(), visited.data_ptr<int>(), counters.data_ptr<int>(),
-                  D, deg, J, m, H, (int)metric, (int)delta, (int)max_expansions,
-                  (int)policy, (int)nlineage, (float)stop_eps, (int)kstop,
+                  dim, D, J, L, H, (int)metric, (int)delta, (int)max_expansions,
+                  (int)policy, (int)V_in, (float)stop_eps, (int)kstop,
                   Hc ? cache_id.data_ptr<int>() : nullptr,
                   Hc ? cache_d.data_ptr<float>() : nullptr, Hc,
                   bound.numel() ? bound.data_ptr<float>() : nullptr, (int)exclusive);

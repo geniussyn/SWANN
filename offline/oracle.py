@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gpuann import engine                                            # noqa: E402
 
 
-def seed_masks(Xg, Gg, Qg, pool, gt, k, m, budget, team=32, qchunk=128):
+def seed_masks(Xg, Gg, Qg, pool, gt, k, L, B, team=32, qchunk=128):
     """masks[Q, P] uint16: bit t set iff seed p's own best-k contained gt[q, t]."""
     nq, P = Qg.shape[0], len(pool)
     masks = np.zeros((nq, P), dtype=np.uint16)
@@ -37,9 +37,9 @@ def seed_masks(Xg, Gg, Qg, pool, gt, k, m, budget, team=32, qchunk=128):
     for s in range(0, nq, qchunk):
         e = min(s + qchunk, nq)
         seeds = pool_t.expand(e - s, P).contiguous()
-        st = engine.init_states(Xg, Qg[s:e].contiguous(), seeds, m=m,
-                                max_expansions=budget, deg=Gg.shape[1], team_size=team)
-        engine.advance(Xg, Gg, Qg[s:e].contiguous(), st, budget)
+        st = engine.init_states(Xg, Qg[s:e].contiguous(), seeds, L=L,
+                                B=B, D=Gg.shape[1], team_size=team)
+        engine.advance(Xg, Gg, Qg[s:e].contiguous(), st, B)
         st.check()
         ids, _ = engine.branch_topk(st, k)                       # [q, P, k]
         hit = (ids.long().unsqueeze(-1) == gt_t[s:e].to(ids.device).view(-1, 1, 1, k))
@@ -78,10 +78,10 @@ def main():
     ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--graph", default="G.npy", help="graph file inside --data")
-    ap.add_argument("--m", type=int, default=16)
+    ap.add_argument("--L", type=int, default=16)
     ap.add_argument("--P", type=int, default=512)
     ap.add_argument("--pool", default="random", help="entry placement, see offline/place_entries.py")
-    ap.add_argument("--budget", type=int, default=16, help="per-branch expansions")
+    ap.add_argument("--B", type=int, default=16, help="per-branch expansions")
     ap.add_argument("--E", type=int, nargs="+", default=[1, 2, 4, 8, 16])
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--qchunk", type=int, default=128)
@@ -98,7 +98,7 @@ def main():
     from gpuann.pools import load_pool
     pool = load_pool(a.data, a.pool, a.P)
 
-    masks = seed_masks(Xg, Gg, Qg, pool, gt, a.k, a.m, a.budget, qchunk=a.qchunk)
+    masks = seed_masks(Xg, Gg, Qg, pool, gt, a.k, a.L, a.B, qchunk=a.qchunk)
     per_seed = np.array([bin(int(x)).count("1") for x in masks.ravel()]).reshape(masks.shape) / a.k
     union_all = np.zeros(masks.shape[0], dtype=np.int64)
     for p in range(masks.shape[1]):
@@ -107,7 +107,7 @@ def main():
 
     oracle = dp_oracle(masks, a.k, a.E)
     print(f"{man['corpus']} n={man['n']} graph={a.graph}  {a.split} q={Q.shape[0]}  "
-          f"pool={a.pool} P={len(pool)} per-branch budget={a.budget} m={a.m}\n")
+          f"pool={a.pool} P={len(pool)} per-branch B={a.B} L={a.L}\n")
     print(f"mean recall of one pool seed alone      {per_seed.mean():.4f}")
     print(f"best single seed in the pool (oracle 1) {oracle[1].mean() if 1 in oracle else float('nan'):.4f}")
     print(f"whole pool, all {a.P} seeds             {whole_pool.mean():.4f}   <- ceiling of any selection\n")
@@ -120,9 +120,9 @@ def main():
 
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
-        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m, P=a.P,
+        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, L=a.L, P=a.P,
                                          pool=a.pool,
-                                         branch_budget=a.budget, nq=int(Q.shape[0]),
+                                         B=a.B, nq=int(Q.shape[0]),
                                          mean_single_seed=float(per_seed.mean()),
                                          whole_pool=float(whole_pool.mean()),
                                          rows=rows), indent=2))

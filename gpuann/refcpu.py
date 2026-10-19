@@ -55,7 +55,7 @@ def _key(entry):
 POLICY_BEST, POLICY_ROUND_ROBIN = 0, 1
 
 
-def init_state(X, q, seeds, m=16, max_expansions=16, metric=METRIC_IP, team=32,
+def init_state(X, q, seeds, L=16, B=16, metric=METRIC_IP, team=32,
                policy=POLICY_BEST, stop_eps=-1.0, kstop=10):
     """One branch seeded with one or several entries. Mirrors init_states.
 
@@ -73,8 +73,8 @@ def init_state(X, q, seeds, m=16, max_expansions=16, metric=METRIC_IP, team=32,
         seen.add(s)
         cand.append((s, team_distance(q, X[s], metric, team), False, i))
     cand.sort(key=_key)
-    return {"queue": cand[:m], "visited": set(seen), "m": m, "metric": metric, "team": team,
-            "max_expansions": max_expansions, "n_seeds": max(1, len(seeds)), "policy": policy,
+    return {"queue": cand[:L], "visited": set(seen), "L": L, "metric": metric, "team": team,
+            "B": B, "V": max(1, len(seeds)), "policy": policy,
             "stop_eps": stop_eps, "kstop": kstop,
             "counters": {"expansions": 0, "dist_evals": len(cand), "exhausted": 0}}
 
@@ -83,22 +83,22 @@ def advance(X, G, q, state, delta_expansions):
     """Mirrors advance in the kernel, including the stop rule, the expansion
     policy and the merge."""
     X = np.asarray(X, dtype=np.float32); q = np.asarray(q, dtype=np.float32)
-    m, metric, team = state["m"], state["metric"], state["team"]
-    S, policy = state.get("n_seeds", 1), state.get("policy", POLICY_BEST)
+    L, metric, team = state["L"], state["metric"], state["team"]
+    V, policy = state.get("V", 1), state.get("policy", POLICY_BEST)
     eps, kstop = state.get("stop_eps", -1.0), state.get("kstop", 10)
     early = eps >= 0.0
     queue, visited, ctr = state["queue"], state["visited"], state["counters"]
     retired = set()                      # re-derived per call, as the kernel does
 
     for _ in range(delta_expansions):
-        if ctr["expansions"] >= state["max_expansions"]:
+        if ctr["expansions"] >= state["B"]:
             break
         radius = queue[kstop - 1][1] if (0 < kstop <= len(queue)) else float("inf")
         limit = radius * (1.0 + eps) if radius != float("inf") else float("inf")
         slot = None
-        if policy == POLICY_ROUND_ROBIN and S > 1:
-            for turn in range(S):
-                want = (ctr["expansions"] + turn) % S
+        if policy == POLICY_ROUND_ROBIN and V > 1:
+            for turn in range(V):
+                want = (ctr["expansions"] + turn) % V
                 if want in retired:
                     continue
                 found = next((i for i, e in enumerate(queue)
@@ -133,7 +133,7 @@ def advance(X, G, q, state, delta_expansions):
         cand.sort(key=_key)
 
         merged, a, b = [], 0, 0
-        while len(merged) < m and (a < len(queue) or b < len(cand)):
+        while len(merged) < L and (a < len(queue) or b < len(cand)):
             if a < len(queue) and (b >= len(cand) or _key(queue[a]) < _key(cand[b])):
                 merged.append(queue[a]); a += 1
             else:
@@ -143,12 +143,12 @@ def advance(X, G, q, state, delta_expansions):
     return state
 
 
-def run(X, G, q, seeds, m=16, budget=16, metric=METRIC_IP, team=32, policy=POLICY_BEST,
+def run(X, G, q, seeds, L=16, B=16, metric=METRIC_IP, team=32, policy=POLICY_BEST,
         stop_eps=-1.0, kstop=10):
     """init + one full-budget advance, the single-shot path."""
-    st = init_state(X, q, seeds, m=m, max_expansions=budget, metric=metric, team=team,
+    st = init_state(X, q, seeds, L=L, B=B, metric=metric, team=team,
                     policy=policy, stop_eps=stop_eps, kstop=kstop)
-    return advance(X, G, q, st, budget)
+    return advance(X, G, q, st, B)
 
 
 def topk(state, k):

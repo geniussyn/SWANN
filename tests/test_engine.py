@@ -43,7 +43,7 @@ def test_cpu_gpu_exact():
     for metric in (engine.METRIC_IP, engine.METRIC_L2):
         X, G = toy(metric=metric)
         rng = np.random.default_rng(7)
-        nq, J, m, budget = 5, 3, 16, 12
+        nq, J, L, budget = 5, 3, 16, 12
         Qv = rng.standard_normal((nq, X.shape[1]), dtype=np.float32)
         if metric == engine.METRIC_IP:
             Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
@@ -52,8 +52,8 @@ def test_cpu_gpu_exact():
         Xg, Gg, Qg = to_gpu(X, G, Qv)
 
         for team in TEAMS:
-            st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m,
-                                    max_expansions=budget, deg=G.shape[1],
+            st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), L=L,
+                                    B=budget, D=G.shape[1],
                                     metric=metric, team_size=team)
             engine.advance(Xg, Gg, Qg, st, budget)
             st.check()
@@ -63,8 +63,8 @@ def test_cpu_gpu_exact():
 
             for qi in range(nq):
                 for j in range(J):
-                    ref = refcpu.run(X, G, Qv[qi], int(seeds[qi, j]), m=m,
-                                     budget=budget, metric=metric, team=team)
+                    ref = refcpu.run(X, G, Qv[qi], int(seeds[qi, j]), L=L,
+                                     B=budget, metric=metric, team=team)
                     rq = ref["queue"]
                     assert [e[0] for e in rq] == [i for i in gi[qi, j] if i >= 0], \
                         f"ids differ metric={metric} team={team} q={qi} j={j}"
@@ -81,14 +81,14 @@ def test_resume_equivalence():
     """advance(a) then advance(b) is advance(a+b): the whole of stage 2 rests on this."""
     X, G = toy(seed=3)
     rng = np.random.default_rng(11)
-    nq, J, m, budget = 8, 4, 32, 24
+    nq, J, L, budget = 8, 4, 32, 24
     Qv = rng.standard_normal((nq, X.shape[1]), dtype=np.float32)
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     Qv = np.ascontiguousarray(Qv)
     seeds = torch.from_numpy(rng.integers(0, X.shape[0], (nq, J)).astype(np.int32))
     Xg, Gg, Qg = to_gpu(X, G, Qv)
 
-    kw = dict(m=m, max_expansions=budget, deg=G.shape[1], team_size=32)
+    kw = dict(L=L, B=budget, D=G.shape[1], team_size=32)
     one = engine.init_states(Xg, Qg, seeds, **kw)
     engine.advance(Xg, Gg, Qg, one, budget)
 
@@ -112,7 +112,7 @@ def test_budget_is_a_state_property():
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     seeds = torch.from_numpy(rng.integers(0, X.shape[0], (4, 2)).astype(np.int32))
     Xg, Gg, Qg = to_gpu(X, G, Qv)
-    st = engine.init_states(Xg, Qg, seeds, m=16, max_expansions=10, deg=G.shape[1])
+    st = engine.init_states(Xg, Qg, seeds, L=16, B=10, D=G.shape[1])
     engine.advance(Xg, Gg, Qg, st, 100)
     assert int(st.expansions.max()) == 10, int(st.expansions.max())
     return "budget capped by the state, not by the call"
@@ -120,8 +120,8 @@ def test_budget_is_a_state_property():
 
 def test_brute_force_on_complete_graph():
     """On a complete graph one expansion sees everything, so the queue must be
-    the exact top-m. Checks the distances themselves, not only the plumbing."""
-    n, d, m = 96, 48, 16
+    the exact top-L. Checks the distances themselves, not only the plumbing."""
+    n, d, L = 96, 48, 16
     rng = np.random.default_rng(17)
     X = rng.standard_normal((n, d), dtype=np.float32)
     X /= np.linalg.norm(X, axis=1, keepdims=True)
@@ -132,7 +132,7 @@ def test_brute_force_on_complete_graph():
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     seeds = torch.zeros((6, 1), dtype=torch.int32)
-    ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=10, m=m, budget=1)
+    ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=10, L=L, B=1)
     exact = 1.0 - (Qv @ X.T)
     want = np.argsort(exact, axis=1, kind="stable")[:, :10]
     got = ids.cpu().numpy()
@@ -152,7 +152,7 @@ def test_dead_branch_and_exhaustion():
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     seeds = torch.tensor([[0, -1], [5, -1]], dtype=torch.int32)
-    st = engine.init_states(Xg, Qg, seeds, m=16, max_expansions=16, deg=8)
+    st = engine.init_states(Xg, Qg, seeds, L=16, B=16, D=8)
     engine.advance(Xg, Gg, Qg, st, 16)
     st.check()
     assert int(st.expansions[0, 0]) == 1 and int(st.exhausted[0, 0]) == 1
@@ -171,7 +171,7 @@ def test_visited_overflow_is_reported():
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     st = engine.init_states(Xg, Qg, torch.zeros((2, 1), dtype=torch.int32),
-                            m=16, max_expansions=16, deg=G.shape[1])
+                            L=16, B=16, D=G.shape[1])
     st.visited = torch.zeros((2, 1, 64), dtype=torch.int32, device=DEV)   # far too small
     st.counters.zero_()
     engine.advance(Xg, Gg, Qg, st, 16)
@@ -192,7 +192,7 @@ def test_merge_dedup():
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     seeds = torch.from_numpy(rng.integers(0, X.shape[0], (nq, J)).astype(np.int32))
     Xg, Gg, Qg = to_gpu(X, G, Qv)
-    ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=k, m=16, budget=16)
+    ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=k, L=16, B=16)
     bi, bd = engine.branch_topk(st, k)
     bi, bd = bi.cpu().numpy(), bd.cpu().numpy()
     gi, gd = ids.cpu().numpy(), dist.cpu().numpy()
@@ -218,14 +218,14 @@ def test_shared_cache_is_free_of_consequence():
     """
     X, G = toy(seed=79)
     rng = np.random.default_rng(83)
-    nq, E, m, budget = 16, 24, 32, 12
+    nq, E, L, budget = 16, 24, 32, 12
     Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
     seeds = torch.from_numpy(rng.integers(0, X.shape[0], (nq, E)).astype(np.int32))
     Xg, Gg, Qg = to_gpu(X, G, Qv)
 
-    plain = engine.search(Xg, Gg, Qg, seeds, k=10, m=m, budget=budget)
-    cached = engine.search(Xg, Gg, Qg, seeds, k=10, m=m, budget=budget, shared_cache=True)
+    plain = engine.search(Xg, Gg, Qg, seeds, k=10, L=L, B=budget)
+    cached = engine.search(Xg, Gg, Qg, seeds, k=10, L=L, B=budget, shared_cache=True)
     assert torch.equal(plain[0], cached[0]), "ids differ with the cache on"
     assert torch.equal(plain[1], cached[1]), "distances differ with the cache on"
     assert torch.equal(plain[2].ids, cached[2].ids), "queues differ"
@@ -248,7 +248,7 @@ def test_determinism():
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     ref = None
     for _ in range(5):
-        ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=10, m=16, budget=16)
+        ids, dist, st = engine.search(Xg, Gg, Qg, seeds, k=10, L=16, B=16)
         now = (ids.cpu().numpy().copy(), dist.cpu().numpy().copy(),
                st.counters.cpu().numpy().copy())
         if ref is None:
@@ -264,20 +264,20 @@ def test_multiseed_matches_cpu():
     both expansion policies, with the lineage of every entry agreeing too."""
     X, G = toy(seed=53)
     rng = np.random.default_rng(59)
-    nq, S, m, budget = 4, 6, 32, 20
+    nq, V, L, budget = 4, 6, 32, 20
     Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
-    seeds = rng.integers(0, X.shape[0], (nq, 1, S)).astype(np.int32)
+    seeds = rng.integers(0, X.shape[0], (nq, 1, V)).astype(np.int32)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     for policy in (engine.POLICY_BEST, engine.POLICY_ROUND_ROBIN):
-        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m, max_expansions=budget,
-                                deg=G.shape[1], policy=policy)
+        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), L=L, B=budget,
+                                D=G.shape[1], policy=policy)
         engine.advance(Xg, Gg, Qg, st, budget)
         st.check()
         gi, gd = st.ids.cpu().numpy(), st.dist.cpu().numpy()
         gl = st.lineage.cpu().numpy()
         for q in range(nq):
-            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), m=m, budget=budget, policy=policy)
+            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), L=L, B=budget, policy=policy)
             rq = ref["queue"]
             assert [e[0] for e in rq] == [i for i in gi[q, 0] if i >= 0], f"ids differ, policy {policy}"
             for slot, e in enumerate(rq):
@@ -291,20 +291,20 @@ def test_early_stop_matches_cpu():
     """Per-lineage retirement: same queue as the reference, and it really stops."""
     X, G = toy(seed=71)
     rng = np.random.default_rng(73)
-    nq, S, m, budget, k = 4, 4, 32, 64, 10
+    nq, V, L, budget, k = 4, 4, 32, 64, 10
     Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
-    seeds = rng.integers(0, X.shape[0], (nq, 1, S)).astype(np.int32)
+    seeds = rng.integers(0, X.shape[0], (nq, 1, V)).astype(np.int32)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
     for eps in (0.0, 0.1, 0.25):
-        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m, max_expansions=budget,
-                                deg=G.shape[1], policy=engine.POLICY_ROUND_ROBIN,
+        st = engine.init_states(Xg, Qg, torch.from_numpy(seeds), L=L, B=budget,
+                                D=G.shape[1], policy=engine.POLICY_ROUND_ROBIN,
                                 stop_eps=eps, kstop=k)
         engine.advance(Xg, Gg, Qg, st, budget)
         st.check()
         gi, gd = st.ids.cpu().numpy(), st.dist.cpu().numpy()
         for q in range(nq):
-            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), m=m, budget=budget,
+            ref = refcpu.run(X, G, Qv[q], list(seeds[q, 0]), L=L, B=budget,
                              policy=engine.POLICY_ROUND_ROBIN, stop_eps=eps, kstop=k)
             assert [e[0] for e in ref["queue"]] == [i for i in gi[q, 0] if i >= 0], \
                 f"ids differ at eps={eps}"
@@ -316,28 +316,28 @@ def test_early_stop_matches_cpu():
 
 
 def test_shared_state_beats_split_branches_on_work():
-    """S seeds in one state evaluate each node once; S branches do not.
+    """V seeds in one state evaluate each node once; V branches do not.
 
     Compared per expansion actually performed, because the two structures do not
-    spend the same number of expansions: a shared queue of width m holds roughly
-    m/S live candidates per lineage, so round-robin exhausts early unless m is
-    comfortably larger than S. That is a real constraint on the design, not an
+    spend the same number of expansions: a shared queue of width L holds roughly
+    L/V live candidates per lineage, so round-robin exhausts early unless L is
+    comfortably larger than V. That is a real constraint on the design, not an
     artefact of the test.
     """
     X, G = toy(seed=61)
     rng = np.random.default_rng(67)
-    nq, S, budget = 32, 8, 64
+    nq, V, budget = 32, 8, 64
     Qv = np.ascontiguousarray(rng.standard_normal((nq, X.shape[1]), dtype=np.float32))
     Qv /= np.linalg.norm(Qv, axis=1, keepdims=True)
-    seeds = rng.integers(0, X.shape[0], (nq, S)).astype(np.int32)
+    seeds = rng.integers(0, X.shape[0], (nq, V)).astype(np.int32)
     Xg, Gg, Qg = to_gpu(X, G, Qv)
 
-    m = 64
-    split = engine.init_states(Xg, Qg, torch.from_numpy(seeds), m=m,
-                               max_expansions=budget // S, deg=G.shape[1])
-    engine.advance(Xg, Gg, Qg, split, budget // S)
-    shared = engine.init_states(Xg, Qg, torch.from_numpy(seeds).unsqueeze(1), m=m,
-                                max_expansions=budget, deg=G.shape[1],
+    L = 64
+    split = engine.init_states(Xg, Qg, torch.from_numpy(seeds), L=L,
+                               B=budget // V, D=G.shape[1])
+    engine.advance(Xg, Gg, Qg, split, budget // V)
+    shared = engine.init_states(Xg, Qg, torch.from_numpy(seeds).unsqueeze(1), L=L,
+                                B=budget, D=G.shape[1],
                                 policy=engine.POLICY_ROUND_ROBIN)
     engine.advance(Xg, Gg, Qg, shared, budget)
     a = (split.dist_evals.sum(1).float() / split.expansions.sum(1).clamp(min=1).float()).mean()

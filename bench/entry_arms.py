@@ -50,8 +50,8 @@ class Arms:
     """Holds whatever the arms need, so selection can be timed on its own."""
 
     def __init__(self, Xg, Qg, pool, data, pool_name, R, tau, L, n_near, rng_seed=1234,
-                 gt=None):
-        self.Xg, self.Qg, self.gt = Xg, Qg, gt
+                 gt=None, metric=0):
+        self.Xg, self.Qg, self.gt, self.metric = Xg, Qg, gt, metric
         self.pool_t = torch.from_numpy(pool).to(Xg.device)
         self.P = len(pool)
         self.rng = np.random.default_rng(rng_seed)
@@ -99,7 +99,7 @@ class Arms:
         t0, t1 = torch.cuda.Event(True), torch.cuda.Event(True)
         torch.cuda.synchronize(); t0.record()
         if arm in ("distance", "single"):
-            cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t)
+            cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t, self.metric)
             near = torch.topk(cat, E, dim=1, largest=False).indices
             seeds = self.pool_t[near]
             info = {}
@@ -143,16 +143,18 @@ def main():
     ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--graph", default="G.npy", help="graph file inside --data")
-    ap.add_argument("--m", type=int, default=16)
+    ap.add_argument("--L", type=int, default=16, help="queue width per branch")
     ap.add_argument("--P", type=int, default=512)
     ap.add_argument("--R", type=int, default=128)
     ap.add_argument("--pool", default="random")
     ap.add_argument("--tau", type=float, default=0.05)
-    ap.add_argument("--L", type=int, default=32)
+    ap.add_argument("--L-cand", dest="L_cand", type=int, default=32,
+                    help="candidate list size for the A/MMR selectors")
     ap.add_argument("--n-near", type=int, default=24)
     ap.add_argument("--total-budget", type=int, default=128)
-    ap.add_argument("--per-branch", type=int, default=0, help="0 = total-budget // E")
-    ap.add_argument("--E", type=int, nargs="+", default=[1, 2, 4, 8, 16])
+    ap.add_argument("--B", type=int, default=0, help="expansions per branch; 0 = total // V")
+    ap.add_argument("--V", type=int, nargs="+", default=[1, 2, 4, 8, 16],
+                    help="entries (branches, or lineages when shared)")
     ap.add_argument("--arms", nargs="+", default=["distance", "random", "sketch"])
     ap.add_argument("--fanout", default="branch", choices=["branch", "shared"],
                     help="branch: E independent states. shared: E seeds in one state, "
@@ -162,6 +164,8 @@ def main():
                          "the current k-th best distance; <0 runs the queue out")
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
+    ap.add_argument("--metric", default=None, choices=["ip", "l2"],
+                    help="default: read it from the corpus manifest")
     ap.add_argument("--team", type=int, default=32)
     ap.add_argument("--exclusive", action="store_true",
                     help="a node claimed by one branch is off limits to the others")
@@ -201,41 +205,45 @@ def main():
         Q, gt = Q[: a.nq], gt[: a.nq]
     Xg = torch.from_numpy(X).cuda(); Gg = torch.from_numpy(G).cuda(); Qg = torch.from_numpy(Q).cuda()
     hard_idx = np.load(a.hard) if a.hard is not None else None
+    metric = a.metric or ("ip" if man["metric"].startswith("ip") else "l2")
+    metric_id = engine.METRIC_IP if metric == "ip" else engine.METRIC_L2
     pool = load_pool(a.data, a.pool, a.P)
-    arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near, gt=gt)
+    arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near, gt=gt,
+                metric=metric_id)
     arms.hier_budget, arms.hier_entry_seeds, arms.hier_m = a.hier_budget, a.hier_seeds, a.hier_m
     arms.mmr_lam = a.mmr_lam
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time
         if arms.supports(w) and w != "random":
-            arms.seeds(w, max(a.E))
+            arms.seeds(w, max(a.V))
 
     print(f"{man['corpus']} n={man['n']} graph={a.graph}  {a.split} q={Q.shape[0]}  "
-          f"m={a.m} pool={a.pool}(P={len(pool)}) fanout={a.fanout}"
+          f"L={a.L} pool={a.pool}(P={len(pool)}) fanout={a.fanout}"
           + (f"/{a.policy}" if a.fanout == "shared" else "")
           + (" X=fp16" if a.half else "") + f" tau={a.tau}\n")
-    print(f"{'arm':13s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
+    print(f"{'arm':13s} {'V':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
           f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}"
           + (f" {'hard@10':>9s}" if a.hard is not None else ""))
     rows, perq = [], []
     policy = engine.POLICY_ROUND_ROBIN if a.policy == "rr" else engine.POLICY_BEST
-    for E in a.E:
+    for V in a.V:
         # A shared state spends the whole budget; independent branches split it.
-        B = a.per_branch or (a.total_budget if a.fanout == "shared"
-                             else max(1, a.total_budget // E))
+        B = a.B or (a.total_B if a.fanout == "shared"
+                    else max(1, a.total_B // V))
         for arm in a.arms:
             if not arms.supports(arm):
                 continue
-            if E == 1 and arm == "random":
+            if V == 1 and arm == "random":
                 continue
-            seeds, sel_ms, info = arms.seeds(arm, E)
+            seeds, sel_ms, info = arms.seeds(arm, V)
             if a.fanout == "shared":
                 seeds = seeds.unsqueeze(1)                        # [Q, 1, E]
             best = None
             for r in range(a.repeats + 1):
                 torch.cuda.synchronize(); t = time.perf_counter()
-                ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
-                                              budget=B, team_size=a.team, policy=policy,
+                ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, L=a.L,
+                                              B=B, team_size=a.team, policy=policy,
+                                              metric=metric_id,
                                               stop_eps=a.stop_eps, shared_cache=a.cache,
                                               shared_bound=a.bound, exclusive=a.exclusive)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
@@ -250,15 +258,15 @@ def main():
             rec_hard = recall_at_k(got[hard_idx], gt[hard_idx]) if hard_idx is not None else None
             de = float(st.dist_evals.sum(1).float().mean())
             tot = best + sel_ms
-            name = "single" if (E == 1 and arm == "distance") else arm
-            if a.fanout == "shared" and E > 1:
+            name = "single" if (V == 1 and arm == "distance") else arm
+            if a.fanout == "shared" and V > 1:
                 name = f"{name}/{a.policy}"
-            rows.append(dict(arm=name, E=E, B=B, m=a.m, fanout=a.fanout, policy=a.policy,
+            rows.append(dict(arm=name, E=V, B=B, L=a.L, fanout=a.fanout, policy=a.policy,
                              stop_eps=a.stop_eps, expansions=float(st.expansions.sum(1).float().mean()),
                              recall=rec, recall_hard=rec_hard, dist_per_q=de,
                              select_ms=sel_ms, search_ms=best, total_ms=tot,
                              qps=Q.shape[0] / (tot / 1e3), **info))
-            print(f"{name:13s} {E:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
+            print(f"{name:13s} {V:3d} {B:4d} {rec:10.4f} {de:8.1f} {sel_ms:7.2f} "
                   f"{best:10.2f} {tot:9.2f} {Q.shape[0]/(tot/1e3):8.0f}"
                   + (f" {rec_hard:9.4f}" if rec_hard is not None else "")
                   + ("  " + " ".join(f"{k} {v}" for k, v in info.items()) if info else ""))
@@ -266,13 +274,13 @@ def main():
     if a.save_perquery:
         a.save_perquery.parent.mkdir(parents=True, exist_ok=True)
         np.savez(a.save_perquery, perq=np.array(perq),
-                 labels=np.array([f"m{r['m']}_E{r['E']}_B{r['B']}" for r in rows]))
+                 labels=np.array([f"L{r['L']}_V{r['E']}_B{r['B']}" for r in rows]))
         print(f"\nwrote {a.save_perquery}")
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
-        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m, P=a.P,
-                                         pool=a.pool, tau=a.tau, L=a.L, n_near=a.n_near,
-                                         total_budget=a.total_budget, per_branch=a.per_branch,
+        a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, L=a.L, P=a.P,
+                                         pool=a.pool, tau=a.tau, cand_L=a.L_cand, n_near=a.n_near,
+                                         total_budget=a.total_B, per_branch=a.B,
                                          nq=int(Q.shape[0]), rows=rows), indent=2))
         print(f"\nwrote {a.out}")
 

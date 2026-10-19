@@ -36,8 +36,8 @@ def main():
     ap.add_argument("--split", default="val")
     ap.add_argument("--h", type=int, default=2)
     ap.add_argument("--k", type=int, default=10)
-    ap.add_argument("--m", type=int, default=128)
-    ap.add_argument("--S", type=int, default=4)
+    ap.add_argument("--L", type=int, default=128)
+    ap.add_argument("--V", type=int, default=4)
     ap.add_argument("--pool", default="random4k")
     ap.add_argument("--P", type=int, default=4096)
     ap.add_argument("--steps", type=int, default=256)
@@ -57,8 +57,8 @@ def main():
     Xs = Xg.half().contiguous() if a.half else Xg
     pool = load_pool(a.data, a.pool, a.P)
     arms = Arms(Xg, Qg, pool, a.data, a.pool, 128, 0.1, 32, 24)
-    seeds, _, _ = arms.seeds("distance", a.S)
-    st = engine.init_states(Xs, Qg, seeds.unsqueeze(1), m=a.m, max_expansions=a.steps,
+    seeds, _, _ = arms.seeds("distance", a.V)
+    st = engine.init_states(Xs, Qg, seeds.unsqueeze(1), m=a.L, max_expansions=a.steps,
                             deg=G.shape[1], team_size=16, policy=engine.POLICY_ROUND_ROBIN)
 
     gt_t = torch.from_numpy(gt.astype(np.int64)).cuda()              # [q, k]
@@ -94,13 +94,13 @@ def main():
         frontier.append(d.min(dim=1).values.clone())
         # per-lineage frontier: the best unexpanded candidate of each seed's descent
         lin = st.lineage[:, 0].long()
-        pl = torch.full((nq, a.S), float("inf"), device="cuda")
-        pl.scatter_reduce_(1, lin.clamp(max=a.S - 1), d, reduce="amin")
+        pl = torch.full((nq, a.V), float("inf"), device="cuda")
+        pl.scatter_reduce_(1, lin.clamp(max=a.V - 1), d, reduce="amin")
         frontier[-1] = pl
 
     hits = np.array(hits); newfrags = np.array(newfrags); changed = np.array(changed)
     cum_hit = np.cumsum(hits) / (nq * a.k)
-    print(f"graph={a.graph} q={nq} m={a.m} S={a.S} steps={a.steps}\n")
+    print(f"graph={a.graph} q={nq} L={a.L} V={a.V} steps={a.steps}\n")
     print(f"{'expansions':>10s} {'recall@10':>10s} {'new gt':>8s} {'new fragments':>14s} "
           f"{'queries whose topk moved':>25s}")
     for t in (8, 16, 24, 32, 48, 64, 96, 128, 192, a.steps - 1):
@@ -174,7 +174,7 @@ def main():
         a.out.parent.mkdir(parents=True, exist_ok=True)
         np.savez(a.out.with_suffix(".npz"), hits=hits, newfrags=newfrags, changed=changed,
                  per_query_hit=H, per_query_changed=C, radius=R, frontier=F)
-        a.out.write_text(json.dumps(dict(graph=a.graph, nq=int(nq), m=a.m, S=a.S,
+        a.out.write_text(json.dumps(dict(graph=a.graph, nq=int(nq), L=a.L, V=a.V,
                                          steps=a.steps, recall_curve=cum_hit.tolist(),
                                          rules=rows), indent=2))
         print(f"\nwrote {a.out}")

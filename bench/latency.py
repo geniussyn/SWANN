@@ -48,7 +48,7 @@ def main():
     ap.add_argument("--Q", type=int, nargs="+", default=[1, 8, 64, 256, 1024])
     ap.add_argument("--configs", nargs="+",
                     default=["shared:distance:8:128:512", "branch:distance:100:16:16"],
-                    help="fanout:arm:E:m:B")
+                    help="fanout:arm:V:L:B")
     ap.add_argument("--repeats", type=int, default=20)
     ap.add_argument("--stop-eps", type=float, default=None,
                     help="retirement slack; default 0.15 for shared, off for branch")
@@ -75,12 +75,12 @@ def main():
     print(f"{'config':32s} {'Q':>5s} {'CTAs':>6s} {'recall@10':>10s} "
           f"{'p50 ms':>8s} {'p95 ms':>8s} {'ms/query':>9s}")
     for cfg in a.configs:
-        fan, arm, E, m, B = cfg.split(":")
-        E, m, B = int(E), int(m), int(B)
+        fan, arm, V, L, B = cfg.split(":")
+        V, L, B = int(V), int(L), int(B)
         for nq in a.Q:
             Qg = torch.from_numpy(np.ascontiguousarray(Qa[:nq])).cuda()
             arms = Arms(Xg, Qg, pool, a.data, a.pool, 128, 0.1, 32, 24)
-            seeds, _, _ = arms.seeds(arm, E)
+            seeds, _, _ = arms.seeds(arm, V)
             if fan == "shared":
                 seeds = seeds.unsqueeze(1)
                 policy = engine.POLICY_ROUND_ROBIN
@@ -91,15 +91,15 @@ def main():
             out = {}
 
             def run():
-                out["r"] = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=m, budget=B,
+                out["r"] = engine.search(Xs, Gg, Qg, seeds, k=a.k, L=L, B=B,
                                          team_size=16, policy=policy, stop_eps=eps,
                                          shared_cache=a.cache, shared_bound=a.bound,
                                          exclusive=a.exclusive)
             p50, p95 = timed(run, a.repeats)
             ids = out["r"][0]
             rec = recall_at_k(ids.cpu().numpy(), gt[:nq])
-            ctas = nq * (1 if fan == "shared" else E)
-            name = f"{fan} E={E} m={m} B={B}"
+            ctas = nq * (1 if fan == "shared" else V)
+            name = f"{fan} V={V} L={L} B={B}"
             print(f"{name:32s} {nq:5d} {ctas:6d} {rec:10.4f} {p50:8.2f} {p95:8.2f} "
                   f"{p50/nq:9.3f}")
             rows.append(dict(config=cfg, Q=nq, ctas=ctas, recall=rec, p50=p50, p95=p95,
