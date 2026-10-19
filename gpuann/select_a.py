@@ -141,3 +141,36 @@ def select_spread(Qg, Xg, pool_t, E, n_cand=64):
             pick = far.argmax(dim=1)
     ids = pool_t.long()[cand]
     return torch.gather(ids, 1, chosen).to(torch.int32)
+
+
+def select_mmr(Qg, Xg, pool_t, E, lam=0.5, n_cand=64):
+    """Near the query, and unlike each other, with the trade-off exposed.
+
+    Two documents' plain similarity predicts whether they sit in the same
+    fragment of a query's answer at AUC 0.78-0.80, which is the only usable
+    signal measured so far for "these two are different pieces". Pure max-min
+    spread (lam = 0) was measured and lost, because entries chosen only for being
+    unlike each other are also far from the query. MMR keeps both terms:
+
+        score(e) = lam * sim(q, e) - (1 - lam) * max_{c in chosen} sim(e, c)
+
+    lam = 1 is plain nearest; lam = 0 is the spread arm that failed.
+    """
+    cat = catalog_scores(Qg, Xg, pool_t)                          # [Q, P] distances
+    cand = torch.topk(cat, n_cand, dim=1, largest=False).indices  # [Q, C]
+    V = Xg[pool_t.long()][cand]                                   # [Q, C, D]
+    pair = torch.bmm(V, V.transpose(1, 2))                        # similarity
+    qsim = 1.0 - torch.gather(cat, 1, cand)                       # [Q, C]
+    Q, C = cand.shape
+    dev = cand.device
+    chosen = torch.zeros((Q, E), dtype=torch.long, device=dev)
+    worst = torch.full((Q, C), -INF, device=dev)                  # max sim to chosen
+    pick = qsim.argmax(dim=1)
+    for i in range(E):
+        chosen[:, i] = pick
+        worst = torch.maximum(worst, pair[torch.arange(Q, device=dev), pick])
+        worst.scatter_(1, pick.view(-1, 1), INF)                  # never pick twice
+        if i + 1 < E:
+            pick = (lam * qsim - (1.0 - lam) * worst).argmax(dim=1)
+    ids = pool_t.long()[cand]
+    return torch.gather(ids, 1, chosen).to(torch.int32)

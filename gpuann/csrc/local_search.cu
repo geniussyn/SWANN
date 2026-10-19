@@ -36,6 +36,13 @@
                       // [3] exhausted, [4] cache hits, [5] cache slots claimed
 #define CPROBE  32    // bounded probe into the shared cache; a miss just recomputes
 
+// Exclusive mode: the per-query cache doubles as a claim. A node another branch
+// has already taken is skipped outright rather than entered with its cached
+// distance, so branches cannot retread each other's ground and are pushed into
+// territory nobody has. Measured reason: among a query's 64 nearest candidate
+// entries, 94% of pairs end up recovering overlapping fragments -- the entries
+// funnel into one basin, so diversity has to come from the trajectories rather
+// than from where they start.
 static const int POLICY_BEST = 0;          // always the nearest unexpanded candidate
 static const int POLICY_ROUND_ROBIN = 1;   // nearest unexpanded of lineage (step % S)
 
@@ -279,7 +286,8 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                                int D, int deg, int J, int m, int H,
                                int metric, int delta, int max_expansions,
                                int policy, int S, float stop_eps, int kstop,
-                               int* cache_id, float* cache_d, int Hc, float* bound) {
+                               int* cache_id, float* cache_d, int Hc, float* bound,
+                               int exclusive) {
     const int j = blockIdx.x, q = blockIdx.y;
     const int tid = threadIdx.x;
     const int team = tid / TEAM, lane = tid % TEAM, nteams = BLOCK / TEAM;
@@ -395,7 +403,10 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                             slot = __shfl_sync(tmask, slot, 0, TEAM);
                             d = __shfl_sync(tmask, d, 0, TEAM);
                         }
-                        if (d == FLT_MAX) {                      // not cached yet
+                        if (exclusive && slot >= 0 && !claimed && d != FLT_MAX) {
+                            // somebody else owns this node; leave it to them
+                            if (lane == 0) atomicAdd(&ctr[4], 1);
+                        } else if (d == FLT_MAX) {               // not cached yet
                             d = team_dist<TEAM, XT>(sq, X + (size_t)v * D, D, metric, lane, tmask);
                             if (lane == 0) {
                                 if (slot >= 0) { ((volatile float*)cdd)[slot] = d;
@@ -405,7 +416,10 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                         } else if (lane == 0) {
                             atomicAdd(&ctr[4], 1);
                         }
-                        if (lane == 0) { c_id[nidx] = v; c_d[nidx] = d; c_l[nidx] = plin; }
+                        const bool taken = exclusive && slot >= 0 && !claimed && d != FLT_MAX;
+                        if (lane == 0 && !taken) {
+                            c_id[nidx] = v; c_d[nidx] = d; c_l[nidx] = plin;
+                        }
                     }
                 }
             }
@@ -515,7 +529,8 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
              torch::Tensor lin, torch::Tensor visited, torch::Tensor counters,
              int64_t metric, int64_t team_size, int64_t delta, int64_t max_expansions,
              int64_t policy, int64_t nlineage, double stop_eps, int64_t kstop,
-             torch::Tensor cache_id, torch::Tensor cache_d, torch::Tensor bound) {
+             torch::Tensor cache_id, torch::Tensor cache_d, torch::Tensor bound,
+             int64_t exclusive) {
     check_common(X, Qv, ids, dist, expd, visited, counters);
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     TORCH_CHECK(G.is_cuda() && G.scalar_type() == torch::kInt32 && G.is_contiguous(), "G: contiguous cuda int32");
@@ -542,7 +557,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
                   (int)policy, (int)nlineage, (float)stop_eps, (int)kstop,
                   Hc ? cache_id.data_ptr<int>() : nullptr,
                   Hc ? cache_d.data_ptr<float>() : nullptr, Hc,
-                  bound.numel() ? bound.data_ptr<float>() : nullptr);
+                  bound.numel() ? bound.data_ptr<float>() : nullptr, (int)exclusive);
     C10_CUDA_CHECK(cudaGetLastError());
 }
 

@@ -730,6 +730,63 @@ corpus.
 
 ![three way](results/final/fig_three_way.png)
 
+## Exclusive territory: diversity from trajectories, not from placement
+
+The fragment hypothesis was tested from the geometric side first. Fragments are
+**not** orthogonal as seen from the query -- 62.3 degrees between pieces against
+57.4 within, on MS MARCO -- and higher dimension does not make them more so
+(GloVe at d=100 reads 70.8 against 65.2). But plain document-to-document
+similarity does predict whether two answer documents belong to the same piece,
+at AUC 0.78-0.80.
+
+That signal does not reach the entries. MMR over the candidate entries, with the
+trade-off swept, buys 0.0015 recall and costs 2.5x the selection time. The reason
+is one measurement:
+
+> Of a query's 64 nearest pool entries, 97.7% recover at least one ground-truth
+> document -- and **94% of entry *pairs* recover overlapping fragments**. Entry
+> similarity predicts disjointness at AUC 0.606.
+
+The candidates nearly all funnel into the same basin. No selector can pick a
+covering subset out of a set that does not cover, which is why coverage
+sketches, spread, MMR, density and the hierarchy all returned nothing.
+
+So the diversity has to come from the trajectories. The per-query cache already
+knows which nodes have been taken; in **exclusive** mode a node another branch
+has claimed is skipped outright instead of being entered with its cached
+distance, and branches are pushed into ground nobody holds.
+
+| fan-out, E=32, m=16, B=16 | recall@10 | distances/query | total |
+|---|---|---|---|
+| shared cache | 0.9734 | 4,802 | 48.6ms |
+| **+ exclusive** | **0.9981** | 12,176 | 105.9ms |
+
+The distance count goes *up* 2.5x, which is the mechanism working: branches that
+cannot take the near nodes keep going outward instead of converging on the same
+place.
+
+The curve it traces (MS MARCO, test, fp32), against native CAGRA at matched
+recall:
+
+| E / B | recall@10 | QPS | vs CAGRA |
+|---|---|---|---|
+| 8 / 8 | 0.9589 | 209,877 | 1.21x |
+| 16 / 8 | 0.9815 | 116,341 | 1.34x |
+| 8 / 16 | 0.9836 | 111,327 | 1.41x |
+| 16 / 16 | 0.9938 | 60,766 | **1.52x** |
+| 32 / 16 | 0.9980 | 32,954 | past CAGRA's reach |
+| 32 / 32 | 0.9983 | 29,981 | past CAGRA's reach |
+
+CAGRA's own sweep stops at 0.9974 and 23,164 QPS (itopk 512; 768 raises inside
+cuVS). The last two rows are **higher recall at 1.3-1.4x the throughput of its
+best point**, and they are also past where our shared-state design tops out
+(0.9940 at 58k). Exclusive territory does not just move along the curve, it
+extends it.
+
+**It is not reproducible.** Which branch claims a node depends on which CTA got
+there first: over 6 runs the returned ids differed every time and recall moved by
+0.00014. Tiny, real, and off by default like the shared bound.
+
 ## Running it
 
 ```bash

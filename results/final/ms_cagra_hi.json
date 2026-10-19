@@ -1,0 +1,57 @@
+{
+  "manifest": {
+    "corpus": "msmarco-1m",
+    "arm": "vanilla",
+    "n": 100000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "cagra_build",
+    "source": "/workspace/SYN/emb/msmarco-1m__vanilla_docs.npy",
+    "graph_build_seconds": 4.85,
+    "graph_params": {
+      "graph_degree": 64,
+      "intermediate_graph_degree": 128,
+      "metric": "inner_product",
+      "cuvs": "26.10"
+    }
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3490,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9932091690544413,
+      "recall_hard": null,
+      "batch_ms": 80.27211669832468,
+      "qps": 43477.114389744725
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9962464183381089,
+      "recall_hard": null,
+      "batch_ms": 113.89116384088993,
+      "qps": 30643.29033352979
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9973638968481374,
+      "recall_hard": null,
+      "batch_ms": 150.66435374319553,
+      "qps": 23164.07241190333
+    }
+  ]
+}

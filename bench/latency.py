@@ -52,6 +52,8 @@ def main():
     ap.add_argument("--repeats", type=int, default=20)
     ap.add_argument("--stop-eps", type=float, default=None,
                     help="retirement slack; default 0.15 for shared, off for branch")
+    ap.add_argument("--exclusive", action="store_true",
+                    help="a node claimed by one branch is off limits to the others")
     ap.add_argument("--bound", action="store_true",
                     help="share the query's k-th best distance across its CTAs")
     ap.add_argument("--cache", action="store_true",
@@ -91,7 +93,8 @@ def main():
             def run():
                 out["r"] = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=m, budget=B,
                                          team_size=16, policy=policy, stop_eps=eps,
-                                         shared_cache=a.cache, shared_bound=a.bound)
+                                         shared_cache=a.cache, shared_bound=a.bound,
+                                         exclusive=a.exclusive)
             p50, p95 = timed(run, a.repeats)
             ids = out["r"][0]
             rec = recall_at_k(ids.cpu().numpy(), gt[:nq])

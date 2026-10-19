@@ -78,6 +78,7 @@ class Arms:
             return self.poolG is not None
         return True
 
+    mmr_lam = 0.5
     hier_budget = 24
     hier_entry_seeds = 4
     hier_m = 32
@@ -119,6 +120,9 @@ class Arms:
             idx = st.ids[:, 0, :E].long().clamp(min=0)
             seeds = self.pool_t[idx]
             info = {"hier_dist": float(st.dist_evals.sum(1).float().mean())}
+        elif arm == "mmr":
+            seeds = select_a.select_mmr(self.Qg, self.Xg, self.pool_t, E, lam=self.mmr_lam)
+            info = {"lam": self.mmr_lam}
         elif arm == "spread":
             seeds = select_a.select_spread(self.Qg, self.Xg, self.pool_t, E)
             info = {}
@@ -159,6 +163,8 @@ def main():
     ap.add_argument("--policy", default="best", choices=["best", "rr"],
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--team", type=int, default=32)
+    ap.add_argument("--exclusive", action="store_true",
+                    help="a node claimed by one branch is off limits to the others")
     ap.add_argument("--bound", action="store_true",
                     help="share the query's k-th best distance across its CTAs")
     ap.add_argument("--cache", action="store_true",
@@ -170,6 +176,7 @@ def main():
     ap.add_argument("--nq", type=int, default=0)
     ap.add_argument("--subset", type=Path, default=None,
                     help="npy of query indices (e.g. the hard decile)")
+    ap.add_argument("--mmr-lam", type=float, default=0.5)
     ap.add_argument("--hier-budget", type=int, default=24)
     ap.add_argument("--hier-seeds", type=int, default=4)
     ap.add_argument("--hier-m", type=int, default=32)
@@ -197,6 +204,7 @@ def main():
     pool = load_pool(a.data, a.pool, a.P)
     arms = Arms(Xg, Qg, pool, a.data, a.pool, a.R, a.tau, a.L, a.n_near, gt=gt)
     arms.hier_budget, arms.hier_entry_seeds, arms.hier_m = a.hier_budget, a.hier_seeds, a.hier_m
+    arms.mmr_lam = a.mmr_lam
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time
         if arms.supports(w) and w != "random":
@@ -229,7 +237,7 @@ def main():
                 ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, m=a.m,
                                               budget=B, team_size=a.team, policy=policy,
                                               stop_eps=a.stop_eps, shared_cache=a.cache,
-                                              shared_bound=a.bound)
+                                              shared_bound=a.bound, exclusive=a.exclusive)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
                     best = ms if best is None else min(best, ms)
