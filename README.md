@@ -787,6 +787,51 @@ extends it.
 there first: over 6 runs the returned ids differed every time and recall moved by
 0.00014. Tiny, real, and off by default like the shared bound.
 
+## The synthesis: many entries, exclusive ground, and leave when you stop winning
+
+A hint worth more than a measurement: *the first correct answer arrives much
+sooner than ef suggests*. It does, and the waste is enormous:
+
+| E=32 branches, 16 expansions each, exclusive | |
+|---|---|
+| branches that ever hold a ground-truth document | 21.4% |
+| of those, hit on expansion 1 | **70.5%** |
+| hit by expansion 3 | 95.0% |
+| **budget spent after the first hit** | **90%** |
+
+A branch does its job in one or two expansions and then spends fourteen more
+not doing it. Cutting the budget outright is the wrong fix -- B=2 is too shallow
+to reach anything (0.9513) and B=4 only matches the shared state. The right fix
+is to let a branch *leave when it stops beating the query*, which the shared
+bound already knows, while exclusive territory keeps the ones still running out
+of each other's way.
+
+All three together (MS MARCO, test, fp32, m=16, nominal budget 16):
+
+| E / eps | recall@10 | QPS | vs native CAGRA |
+|---|---|---|---|
+| 16 / 0.02 | 0.9787 | 143,368 | |
+| 16 / 0.05 | 0.9890 | 101,844 | 1.71x |
+| 32 / 0.02 | 0.9882 | 94,536 | |
+| **32 / 0.05** | **0.9949** | **66,681** | **1.89x** |
+| 64 / 0.03 | 0.9957 | 55,336 | 1.71x |
+| 64 / 0.05 | 0.9978 | 44,333 | past CAGRA's reach |
+| 64 / 0.1 | 0.9991 | 27,906 | past CAGRA's reach |
+| 128 / 0.1 | 0.9997 | 18,719 | past CAGRA's reach |
+
+CAGRA's own sweep ends at 0.9974 and 23,164 QPS. Our 0.9978 is **higher recall
+at 1.9x its best throughput**, and the curve runs on to 0.9997. It also passes
+the shared-state design, which topped out at 0.9940.
+
+FEVER repeats it: 1.67x at 0.9363, 1.66x at 0.9577, **2.02x at 0.9771**, and
+0.9851 past where CAGRA's sweep ends.
+
+![final](results/final/fig_final.png)
+
+Both halves are nondeterministic -- which branch claims a node, and which lowers
+the bound first, depend on CTA order -- so both are flags and both are off by
+default. Measured drift is 0.00014 recall over six runs.
+
 ## Running it
 
 ```bash

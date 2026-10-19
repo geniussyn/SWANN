@@ -1,0 +1,111 @@
+{
+  "manifest": {
+    "corpus": "fever",
+    "arm": "vanilla",
+    "n": 500000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "graph_note": "stand-in: not a navigable built graph, not a CAGRA comparison",
+    "source": "/workspace/SYN/emb/fever__vanilla_docs.npy"
+  },
+  "split": "test",
+  "k": 10,
+  "nq": 3333,
+  "metric": "inner_product",
+  "rows": [
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 32,
+      "width": 4,
+      "recall": 0.8128712871287129,
+      "recall_hard": null,
+      "batch_ms": 16.136824153363705,
+      "qps": 206546.21803666613
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 48,
+      "width": 4,
+      "recall": 0.8639663966396641,
+      "recall_hard": null,
+      "batch_ms": 24.120045825839043,
+      "qps": 138183.8170651178
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 64,
+      "width": 4,
+      "recall": 0.8875187518751876,
+      "recall_hard": null,
+      "batch_ms": 29.507838189601898,
+      "qps": 112953.03907334348
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 96,
+      "width": 4,
+      "recall": 0.9171317131713171,
+      "recall_hard": null,
+      "batch_ms": 42.89774131029844,
+      "qps": 77696.39841619931
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 128,
+      "width": 4,
+      "recall": 0.9335133513351336,
+      "recall_hard": null,
+      "batch_ms": 56.38895649462938,
+      "qps": 59107.31829764296
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 192,
+      "width": 4,
+      "recall": 0.9537653765376538,
+      "recall_hard": null,
+      "batch_ms": 82.47189410030842,
+      "qps": 40413.76806438032
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 256,
+      "width": 4,
+      "recall": 0.9651365136513652,
+      "recall_hard": null,
+      "batch_ms": 109.1688284650445,
+      "qps": 30530.693118752442
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 384,
+      "width": 4,
+      "recall": 0.9767476747674767,
+      "recall_hard": null,
+      "batch_ms": 160.84759030491114,
+      "qps": 20721.479219438665
+    },
+    {
+      "arm": "from_graph",
+      "algo": "single_cta",
+      "itopk": 512,
+      "width": 4,
+      "recall": 0.9833183318331834,
+      "recall_hard": null,
+      "batch_ms": 213.69700506329536,
+      "qps": 15596.849375651249
+    }
+  ]
+}

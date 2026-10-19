@@ -1,0 +1,45 @@
+{
+  "manifest": {
+    "corpus": "fever",
+    "arm": "vanilla",
+    "n": 500000,
+    "d": 1024,
+    "deg": 64,
+    "k": 10,
+    "seed": 0,
+    "metric": "ip_on_l2_normalised",
+    "graph": "exact_knn",
+    "graph_note": "stand-in: not a navigable built graph, not a CAGRA comparison",
+    "source": "/workspace/SYN/emb/fever__vanilla_docs.npy"
+  },
+  "split": "test",
+  "k": 10,
+  "m": 16,
+  "P": 4096,
+  "pool": "random4k",
+  "tau": 0.05,
+  "L": 32,
+  "n_near": 24,
+  "total_budget": 128,
+  "per_branch": 16,
+  "nq": 3333,
+  "rows": [
+    {
+      "arm": "distance",
+      "E": 32,
+      "B": 16,
+      "m": 16,
+      "fanout": "branch",
+      "policy": "best",
+      "stop_eps": 0.05,
+      "expansions": 229.02369689941406,
+      "recall": 0.977107710771077,
+      "recall_hard": null,
+      "dist_per_q": 9382.849609375,
+      "select_ms": 0.9093120098114014,
+      "search_ms": 80.1288029178977,
+      "total_ms": 81.0381149277091,
+      "qps": 41128.794801967415
+    }
+  ]
+}
