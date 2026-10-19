@@ -29,9 +29,13 @@ except ImportError:                                    # older layouts
 from pylibraft.common import device_ndarray
 
 
-def recall_at_k(got, gt):
+def per_query_recall(got, gt):
     k = gt.shape[1]
-    return float(np.mean([len(set(g.tolist()) & set(t.tolist())) / k for g, t in zip(got, gt)]))
+    return np.array([len(set(g.tolist()) & set(t.tolist())) / k for g, t in zip(got, gt)])
+
+
+def recall_at_k(got, gt):
+    return float(per_query_recall(got, gt).mean())
 
 
 def timed_search(sp, idx, qd, k, res, repeats):
@@ -54,6 +58,7 @@ def main():
     ap.add_argument("--split", default="val")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--graph", default="G.npy", help="graph file inside --data")
     ap.add_argument("--metric", default="inner_product")
     ap.add_argument("--half", action="store_true",
                     help="give CAGRA the same fp16 corpus our search reads")
@@ -64,12 +69,13 @@ def main():
     ap.add_argument("--subset", default=None, help="npy of query indices")
     ap.add_argument("--hard", default=None,
                     help="npy of indices to report recall on, with the batch kept whole")
+    ap.add_argument("--save-perquery", default=None)
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
     man = json.loads((a.data / "manifest.json").read_text())
     X = np.load(a.data / "X.npy")
-    G = np.load(a.data / "G.npy")
+    G = np.load(a.data / a.graph)
     Q = np.load(a.data / f"Q_{a.split}.npy")
     gt = np.load(a.data / f"gt_{a.split}_ids.npy")
     if a.subset:
@@ -105,7 +111,7 @@ def main():
         res.sync()
         print(f"built:      CAGRA's own graph, degree {man['deg']}, in {time.perf_counter()-t:.2f}s")
 
-    rows = []
+    rows, perq = [], []
     print(f"\n{'arm':11s} {'algo':11s} {'itopk':>6s} {'width':>6s} {'recall@10':>10s} "
           f"{'ms(batch)':>10s} {'QPS':>9s}")
     for arm, idx in indexes.items():
@@ -120,7 +126,10 @@ def main():
                     except Exception as e:              # noqa: BLE001
                         print(f"{arm:11s} {algo:11s} {it:6d} {w:6d}   skipped: {type(e).__name__}")
                         continue
-                    rec = recall_at_k(nbrs, gt)
+                    pq = per_query_recall(nbrs, gt)
+                    rec = float(pq.mean())
+                    if a.save_perquery:
+                        perq.append(pq)
                     rec_hard = (recall_at_k(nbrs[hard_idx], gt[hard_idx])
                                 if hard_idx is not None else None)
                     rows.append(dict(arm=arm, algo=algo, itopk=it, width=w, recall=rec,
@@ -129,6 +138,10 @@ def main():
                           f"{nq/(ms/1e3):9.0f}"
                           + (f" {rec_hard:9.4f}" if rec_hard is not None else ""))
 
+    if a.save_perquery:
+        np.savez(a.save_perquery, perq=np.array(perq),
+                 labels=np.array([f"{r['algo']}_it{r['itopk']}_w{r['width']}" for r in rows]))
+        print(f"\nwrote {a.save_perquery}")
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
         a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, nq=int(nq),

@@ -293,7 +293,10 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     __shared__ int   c_id[MAXDEG]; __shared__ float c_d[MAXDEG];
     __shared__ unsigned char c_l[MAXDEG];
     __shared__ int   s_slot, s_p, s_plin;
-    __shared__ unsigned s_retired;
+    // 256 lineage bits, because lineage is a uint8 and S may be up to 256. This
+    // was one 32-bit word, which silently shifted out of range for S > 32 -- the
+    // measurements at S = 32 sat exactly on that boundary.
+    __shared__ unsigned s_retired[8];
 
     const size_t bid = (size_t)q * J + j;
     int*  vis = visited  + bid * H;
@@ -312,7 +315,7 @@ __global__ void advance_kernel(const XT* __restrict__ X,
     int nsort = 2; while (nsort < deg && nsort < MAXDEG) nsort <<= 1;
     // Retirement is re-derived every call rather than stored: it is a function
     // of the state, it is monotone, and a re-check costs no expansion.
-    if (tid == 0) s_retired = 0u;
+    for (int i = tid; i < 8; i += BLOCK) s_retired[i] = 0u;
     __syncthreads();
 
     for (int step = 0; step < delta; ++step) {
@@ -335,12 +338,14 @@ __global__ void advance_kernel(const XT* __restrict__ X,
                 // spending them.
                 for (int turn = 0; turn < S && s_slot < 0; ++turn) {
                     const int want = (ctr[0] + turn) % S;
-                    if (s_retired & (1u << want)) continue;
+                    if (s_retired[want >> 5] & (1u << (want & 31))) continue;
                     int found = -1;
                     for (int i = 0; i < m; ++i)
                         if (s_id[i] >= 0 && s_e[i] == 0 && s_l[i] == want) { found = i; break; }
-                    if (found < 0) { s_retired |= (1u << want); continue; }
-                    if (early && s_d[found] > limit) { s_retired |= (1u << want); continue; }
+                    if (found < 0) { s_retired[want >> 5] |= (1u << (want & 31)); continue; }
+                    if (early && s_d[found] > limit) {
+                        s_retired[want >> 5] |= (1u << (want & 31)); continue;
+                    }
                     s_slot = found;
                 }
                 if (s_slot < 0 && !early) {          // legacy fallback: global best
@@ -490,7 +495,8 @@ void init_states(torch::Tensor X, torch::Tensor Qv, torch::Tensor seeds,
     TORCH_CHECK(lin.scalar_type() == torch::kUInt8 && lin.is_contiguous(), "lineage: contiguous uint8");
     const int D = X.size(1), J = ids.size(1), m = ids.size(2), H = visited.size(2);
     const int S = seeds.dim() == 3 ? (int)seeds.size(2) : 1;
-    TORCH_CHECK(S <= MAXDEG, "more seeds per branch than MAXDEG");
+    TORCH_CHECK(S <= MAXDEG, "seeds per branch exceed MAXDEG (the init sort buffer)");
+    TORCH_CHECK(S <= 256, "seeds per branch exceed 256 (lineage is a uint8)");
     TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
     TORCH_CHECK(counters.size(2) == NCTR, "counters last dim must be NCTR");
@@ -516,6 +522,7 @@ void advance(torch::Tensor X, torch::Tensor G, torch::Tensor Qv,
     const int D = X.size(1), deg = G.size(1);
     const int J = ids.size(1), m = ids.size(2), H = visited.size(2);
     TORCH_CHECK(deg <= MAXDEG, "graph degree exceeds MAXDEG");
+    TORCH_CHECK(nlineage <= 256, "lineage count exceeds 256 (lineage is a uint8)");
     TORCH_CHECK(m <= MAXM, "m exceeds MAXM");
     TORCH_CHECK((H & (H - 1)) == 0, "visited table size must be a power of two");
     const int Hc = (cache_id.numel() > 0) ? (int)cache_id.size(1) : 0;

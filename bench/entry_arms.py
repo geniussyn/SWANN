@@ -28,10 +28,17 @@ from gpuann import engine, select_a                                 # noqa: E402
 from gpuann.pools import load_pool                                  # noqa: E402
 
 
-def recall_at_k(got, gt):
+def per_query_recall(got, gt):
+    """Recall@k for each query separately. The own-decile protocol needs the
+    vector, not the mean: an arm's hard stratum is defined by where *it* does
+    badly, so the mean cannot produce it."""
     k = gt.shape[1]
-    return float(np.mean([len(set(g[g >= 0].tolist()) & set(t.tolist())) / k
-                          for g, t in zip(got, gt)]))
+    return np.array([len(set(g[g >= 0].tolist()) & set(t.tolist())) / k
+                     for g, t in zip(got, gt)])
+
+
+def recall_at_k(got, gt):
+    return float(per_query_recall(got, gt).mean())
 
 
 def pool_ids(n, P, seed=0):
@@ -127,6 +134,8 @@ def main():
                          "measured at a batch size that underfills the GPU, and the "
                          "number says more about occupancy than about hardness")
     ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--save-perquery", type=Path, default=None,
+                    help="npz of per-query recall for every row, for own-decile work")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
@@ -154,7 +163,7 @@ def main():
     print(f"{'arm':13s} {'E':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
           f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}"
           + (f" {'hard@10':>9s}" if a.hard is not None else ""))
-    rows = []
+    rows, perq = [], []
     policy = engine.POLICY_ROUND_ROBIN if a.policy == "rr" else engine.POLICY_BEST
     for E in a.E:
         # A shared state spends the whole budget; independent branches split it.
@@ -180,7 +189,10 @@ def main():
                     best = ms if best is None else min(best, ms)
             st.check()
             got = ids.cpu().numpy()
-            rec = recall_at_k(got, gt)
+            pq = per_query_recall(got, gt)
+            rec = float(pq.mean())
+            if a.save_perquery:
+                perq.append(pq)
             rec_hard = recall_at_k(got[hard_idx], gt[hard_idx]) if hard_idx is not None else None
             de = float(st.dist_evals.sum(1).float().mean())
             tot = best + sel_ms
@@ -197,6 +209,11 @@ def main():
                   + (f" {rec_hard:9.4f}" if rec_hard is not None else "")
                   + (f"  fallback {info['fallback_rate']:.2f}" if info else ""))
 
+    if a.save_perquery:
+        a.save_perquery.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(a.save_perquery, perq=np.array(perq),
+                 labels=np.array([f"m{r['m']}_E{r['E']}_B{r['B']}" for r in rows]))
+        print(f"\nwrote {a.save_perquery}")
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
         a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, m=a.m, P=a.P,
