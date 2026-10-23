@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swann"
+version = "0.1.0"
+description = "Intra-query parallelism for graph-based ANN search on GPUs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "torch>=2.4"]
+
+[project.urls]
+Source = "https://github.com/geniussyn/SWANN"
+
+[tool.setuptools]
+packages = ["swann"]
+
+[tool.setuptools.package-data]
+# The CUDA sources ship with the package: the extension is compiled on first
+# import, against whatever torch and driver the user has, rather than shipped
+# as a wheel per architecture.
+swann = ["csrc/*.cu", "csrc/*.cuh"]
