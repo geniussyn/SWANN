@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--threads", type=int, default=0, help="0 = all cores")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--hard", default=None)
+    ap.add_argument("--save-perquery", type=Path, default=None,
+                    help="npz of per-query recall for every efSearch row")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
@@ -73,6 +75,11 @@ def main():
         print(f"{ef:9d} {rec:10.4f} {best:10.2f} {nq/(best/1e3):9.0f}"
               + (f" {rh:9.4f}" if rh is not None else ""))
 
+    if a.save_perquery:
+        Path(a.save_perquery).parent.mkdir(parents=True, exist_ok=True)
+        np.savez(a.save_perquery, perq=np.array(perq),
+                 labels=np.array([f"ef{r['itopk']}" for r in rows]))
+        print(f"wrote {a.save_perquery}")
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)
         a.out.write_text(json.dumps(dict(manifest=man, split=a.split, k=a.k, nq=int(nq),

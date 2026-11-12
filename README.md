@@ -630,6 +630,142 @@ queries, and the lab's definition is the one its other tables use.)
 `bench/fig_recall_qps.py` draws it in the lab's `housestyle`, both panels off one
 set of runs: same batch, same timings, recall read twice.
 
+## How big should the entry catalogue be
+
+The shipped P = 4096 was too small, and the knob is one-sided: at a fixed
+`eps` a larger catalogue adds recall and costs only the scan. On MS MARCO at
+eps = 0.03, going from P = 4096 to 32768 takes recall from 0.9792 to 0.9859 for
+1.45 ms of a 27 ms batch. Measured at matched recall, raising P is worth 1-19%
+on MS MARCO, 18-26% on NQ, 20-22% on OpenAI-1536 and 10-19% on OpenAI-3072.
+
+What sets the optimum is **the operating point**, not the dimension and not the
+corpus size. Within one corpus the argmin moves two orders of magnitude as the
+target approaches that corpus's own ceiling, because near the ceiling `eps` buys
+recall expensively and P buys it cheaply:
+
+| corpus | d | N | target | argmin P |
+|---|---|---|---|---|
+| GloVe | 104 | 1.18M | 0.930 | 2,048 |
+| GloVe | 104 | 1.18M | 0.950 | 8,192 |
+| GloVe | 104 | 1.18M | 0.965 | 65,536 |
+| MS MARCO | 1024 | 1M | 0.980 | 2,048 |
+| MS MARCO | 1024 | 1M | 0.990 | 32,768-131,072 |
+| MS MARCO | 1024 | 1M | 0.994 | 262,144 |
+| NQ | 1024 | 500K | 0.996 | 16,384 |
+| NQ | 1024 | 500K | 0.997 | 65,536 |
+| OpenAI-3072 | 3072 | 995K | 0.998 | 131,072 |
+
+Reading that off d or N gives the wrong answer. Reading it off the **scan share**
+gives the right one, and `offline/choose_P.py` is that rule: *P is the largest
+catalogue whose scan stays under 20% of the total.* Every argmin above sits at a
+scan share of 3-17%, and a larger P starts losing near 25%. The rule needs the
+device, the corpus and `eps` and **no queries and no ground truth** -- timing
+does not depend on whether the answers are right, so random corpus vectors stand
+in as inputs. That matters for more than tidiness: on the OpenAI corpora the only
+query split is the test split, and a swept P would have been tuned on test.
+
+Validated against the argmin of a real validation split: exact on MS MARCO,
+FEVER, GloVe and NQ, two ladder steps high on GIST at a cost of 5-7%. At N near
+1M it lands on **P = 65536, about N/15**. P is capped at N/8 deliberately and not
+for speed: at P = 131072 over 995K the catalogue covers 13% of the corpus and
+already holds 13% of each query's top-k, which makes the configuration a hybrid
+of a graph search and a flat scan and has to be named as one.
+
+### Against native CAGRA with the catalogue sized
+
+`bench/vs_cagra_1m.py`, matched recall and matched precision, each side on its
+own graph and its own knobs, selection charged to us. CAGRA's frontier is swept
+densely in `itopk_size` first, because with the usual 64/128/256/512 ladder the
+gaps straddle the targets and interpolating across them flatters us.
+
+| corpus | d | recall | CAGRA ms | P=4096 | **P=auto** |
+|---|---|---|---|---|---|
+| GloVe | 104 | 0.960 | 16.76 | 1.14x | **1.20x** |
+| GIST | 960 | 0.990 | 21.76 | 1.58x | 1.57x |
+| MS MARCO | 1024 | 0.992 | 189.34 | 4.13x | **4.83x** |
+| NQ | 1024 | 0.997 | 173.00 | 5.02x | **5.67x** |
+| FEVER | 1024 | 0.980 | 207.83 | 2.82x | **3.49x** |
+| OpenAI-1536 | 1536 | 0.997 | 418.16 | 7.47x | **9.17x** |
+| OpenAI-3072 | 3072 | 0.9967 | 1384.41 | 13.84x | **16.57x** |
+
+In fp16 on both sides the ordering does not reverse: MS MARCO 3.37x at 0.989 and
+3.77x at 0.992, NQ 3.95x at 0.997, FEVER 2.79x at 0.980. GIST is measured on its
+whole 500-query validation split, below the batch crossover, so it understates.
+
+## Is CAGRA's graph the better graph? No
+
+The 1.6x native CAGRA holds at fp16 is easy to read as "their builder is better,
+and the kernel likes their fixed degree". Both halves of that are wrong, and
+the measurement that separates them holds **everything but the graph** fixed --
+same corpus, same queries, same entry pool, same budget, and *the same search
+kernel on both sides*. `bench/graph_head_to_head.py`, V=32, L=128, B=512, 2000
+val queries, read at the top of an `eps` sweep (0.05 / 0.15 / 0.30); the full
+sweeps are in `results/degree/*_head_to_head.json`:
+
+| corpus | d | ours: deg / recall@10 / ms | CAGRA: deg / recall@10 / ms |
+|---|---|---|---|
+| MS MARCO 1M | 1024 | 51.6 / **0.9825** / **29.8** | 64.0 / 0.9710 / 35.4 |
+| FEVER 1M | 1024 | 61.7 / **0.9534** / **41.4** | 64.0 / 0.9234 / 43.7 |
+| GloVe 1.18M | 100 | 61.2 / **0.9151** / **10.5** | 64.0 / 0.8810 / 11.2 |
+| GIST 1M | 960 | 37.5 / 0.9680 / 14.1 | 64.0 / 0.9682 / 14.1 |
+
+Ours is ahead on recall at every point of the sweep on three of the four, and on
+GIST it draws at the top (0.9680 against 0.9682 at 14.1ms) after leading lower
+down (0.8578 against 0.8338 at eps=0.05). It does all of it on **fewer edges**:
+GIST is the sharpest case at mean degree 37.5 against 64 -- 41% fewer -- and
+still touches 5,226 adjacency entries per query against 9,088 for the same
+recall, on 22% fewer distance evaluations.
+
+Two things follow. **The gap against native CAGRA is its kernel, not its graph**,
+so the builder is not where to go looking for it. And **varphi_2 ranks the two
+graphs the other way** -- 1.479 for ours against 1.328 -- which makes varphi_2 a
+diagnostic and not an objective to build against.
+
+### The fixed-degree advantage, measured and mostly removed
+
+The other half of the story was that a pruned graph pays for its empty slots. It
+does, and less than it looks. A pruned row is not full -- 51.6 edges in a
+64-wide row on MS MARCO, 37.5 in a 96-wide row on GIST -- and the kernel used to
+walk the whole width on every expansion. It now takes `deg[N]` from
+`engine.graph_degrees(G)` and stops the graph read, the cache probes, the
+expansion rounds and the candidate sort at `deg[p]`. The slots it skips are the
+ones it was already rejecting, so the result is **bitwise identical** and
+`tests/test_engine.py` asserts that over two metrics, two policies and every
+team size.
+
+What it is worth on the real graphs:
+
+| corpus | d | width | mean degree | fill | gain |
+|---|---|---|---|---|---|
+| MS MARCO 1M | 1024 | 96 | 52.1 | 54% | 1.000x |
+| GloVe 1.18M | 100 | 96 | 61.2 | 64% | 1.010x |
+| GIST 1M | 960 | 96 | 37.5 | 39% | 0.998x |
+
+About 1%, and `bench/degree_width.py` says why. Storing one dense degree-64
+GloVe graph at several strides, and running each stride with the bounds at the
+stride and at the real degree:
+
+| stride | bounds | ms | vs narrowest |
+|---|---|---|---|
+| 64 | stride | 3.17 | 1.000x |
+| 64 | degree | 3.14 | 0.992x |
+| 96 | stride | 3.25 | 1.025x |
+| 96 | **degree** | 3.19 | **1.007x** |
+| 128 | stride | 3.60 | 1.136x |
+| 128 | **degree** | 3.41 | **1.075x** |
+
+Recall is identical in all six rows (spread 0.0000): the width is a cost and not
+an answer. Of the 2.5 points a 1.5x-over-wide row costs, the degree bound
+recovers 1.8 and leaves 0.7; at 2x it recovers 6.1 of 13.6. **The padding tax is
+mostly the row stride, not the loop bounds** -- bytes moved for a 384-byte row
+that holds 240 bytes of edges -- and only true compaction (CSR) would reach it,
+which at 0.7% on the shipped widths is not worth writing. That is why CSR is not
+here, and the number is the reason.
+
+So a variable-degree build was never carrying the 1.6x, and now carries about
+nothing. Degree allocation is free to be judged on the graph: LID was, and lost
+by +0.0005 at matched edge count (see below), which the 1% does not rescue.
+
 ## Three corpora, and where the advantage actually is
 
 fp32, test split, each system on the graph its own builder made, QPS over the

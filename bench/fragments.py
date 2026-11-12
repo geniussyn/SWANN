@@ -59,6 +59,11 @@ def main():
     ap.add_argument("--configs", nargs="+", default=["distance:1:64:128", "distance:8:16:16"],
                     help="arm:V:L:B[:shared-policy]  e.g. distance:8:64:128:rr")
     ap.add_argument("--nq", type=int, default=0)
+    ap.add_argument("--cache", action="store_true")
+    ap.add_argument("--bound", action="store_true")
+    ap.add_argument("--exclusive", action="store_true")
+    ap.add_argument("--stop-eps", type=float, default=-1.0)
+    ap.add_argument("--team", type=int, default=32)
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
@@ -85,7 +90,10 @@ def main():
         seeds, sel_ms, _ = arms.seeds(arm, V)
         if shared:
             seeds = seeds.unsqueeze(1)
-        ids, _, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, L=L, B=B, policy=policy)
+        ids, _, st = engine.search(Xg, Gg, Qg, seeds, k=a.k, L=L, B=B, policy=policy,
+                                   team_size=a.team, stop_eps=a.stop_eps,
+                                   shared_cache=a.cache, shared_bound=a.bound,
+                                   exclusive=a.exclusive)
         st.check()
         got = ids.cpu().numpy()
         s = fragment_stats(got, gt, frag)
@@ -102,7 +110,11 @@ def main():
             inr = (ss[:, 2] / np.maximum(ss[:, 3], 1)).mean()
             print(f"{name:10s} {int(sel.sum()):6d} {rec:10.4f} {hitr:14.4f} {inr:14.4f}")
             rows.append(dict(config=cfg, bucket=name, n=int(sel.sum()), recall=float(rec),
-                             frag_hit_rate=float(hitr), recall_in_hit=float(inr)))
+                             frag_hit_rate=float(hitr), recall_in_hit=float(inr),
+                             cache=bool(st.cache_id.numel() > 0),
+                             bound=bool(st.bound.numel() > 0),
+                             exclusive=bool(st.exclusive), stop_eps=a.stop_eps,
+                             J=int(st.ids.shape[1])))
         print()
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

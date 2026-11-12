@@ -31,18 +31,102 @@ def unpack_mask(mask_u32: np.ndarray, R: int) -> np.ndarray:
     return bits.reshape(mask_u32.shape[0], -1)[:, :R].astype(bool)
 
 
-def catalog_scores(Qg, Xg, pool_t, metric=METRIC_IP):
+class reduced_precision:
+    """Scoped, because allow_tf32 is a global and the rest of the system is fp32.
+
+    Flipping it process-wide would quietly change every other measurement in the
+    same run, which is how a precision ablation stops being an ablation.
+    """
+
+    def __init__(self, on=True):
+        self.on = bool(on)
+
+    def __enter__(self):
+        self.prev = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = self.on
+        return self
+
+    def __exit__(self, *exc):
+        torch.backends.cuda.matmul.allow_tf32 = self.prev
+        return False
+
+
+def pool_vectors(Xg, pool_t):
+    """The catalogue as its own matrix, to be held for the life of the index.
+
+    Gathering P rows out of the corpus is 537 MB at P=131072 and the pool never
+    changes, so doing it inside the scan charged every query batch 0.75 ms for a
+    copy that could have been made once.
+    """
+    return Xg[pool_t.long()].contiguous()
+
+
+def catalog_scores(Qg, Xg, pool_t, metric=METRIC_IP, Vp=None, precision="tf32"):
     """Distance from every query to every pool entry, in the corpus's own metric.
 
     Scoring an unnormalised L2 corpus by inner product picks entries by length
     rather than by proximity, so the metric has to come along here too. The cost
     of the catalog is real and is timed with the selection, never outside it.
+
+    This is the one matmul in the system whose precision cannot affect an answer:
+    all that leaves here is which entries a search starts from, and the search
+    then runs in fp32 against the real vectors. Measured at Q=2000, P=131072,
+    d=1024: fp32 10.1 ms at 53 TFLOP/s, tf32 4.1 ms at 130, fp16 2.2 ms at 242,
+    and tf32 picks the identical 32 entries for every query (fp16 agrees on
+    99.7%). So tf32 is the default and fp32 stays available for the comparison.
+
+    Pass `Vp` from `pool_vectors` to skip the gather.
     """
-    V = Xg[pool_t.long()]
+    V = Vp if Vp is not None else Xg[pool_t.long()]
+    if precision == "fp16":
+        qh, vh = Qg.half(), V.half()
+        s = (qh @ vh.T).float()
+    else:
+        with reduced_precision(precision == "tf32"):
+            s = Qg @ V.T
     if metric == METRIC_IP:
-        return 1.0 - (Qg @ V.T)                                   # [Q, P]
-    return ((V * V).sum(1).view(1, -1) - 2.0 * (Qg @ V.T)
+        return 1.0 - s                                            # [Q, P]
+    return ((V * V).sum(1).view(1, -1) - 2.0 * s
             + (Qg * Qg).sum(1).view(-1, 1))
+
+
+def select_nearest(Qg, Vp, E, metric=METRIC_IP, precision="tf32",
+                   slice_P=8192):
+    """The E nearest entries, without ever holding the whole score matrix.
+
+    A dense catalogue is what makes multi-entry search reach the pieces it
+    otherwise misses -- at P=131072 against P=4096 the nearest entry moves from
+    the answer's 170th neighbour to its 7th -- and the only thing standing in the
+    way is that selection used to cost a flat scan. Two things paid for it: the
+    scan ran in fp32 when its whole output is a choice of starting points, and
+    the [Q, P] scores went out to HBM and came straight back into the top-V. So
+    the catalogue is scored a slice at a time and each slice folded into a
+    running best, which is exact -- the best E overall are among the best E of
+    every slice -- and reads the scores while they are still in cache.
+
+    Q=2000, P=131072, d=1024: 15.2 ms as a gather plus fp32 scan plus topk,
+    6.7 ms here, with identical entries for every query.
+    """
+    n, P = Qg.shape[0], Vp.shape[0]
+    bi = torch.empty(n, 0, dtype=torch.long, device=Qg.device)
+    bv = torch.empty(n, 0, dtype=Qg.dtype, device=Qg.device)
+    qn = (Qg * Qg).sum(1).view(-1, 1) if metric != METRIC_IP else None
+    for s in range(0, P, slice_P):
+        V = Vp[s:s + slice_P]
+        if precision == "fp16":
+            sc = (Qg.half() @ V.half().T).float()
+        else:
+            with reduced_precision(precision == "tf32"):
+                sc = Qg @ V.T
+        c = (1.0 - sc) if metric == METRIC_IP else \
+            ((V * V).sum(1).view(1, -1) - 2.0 * sc + qn)
+        v, i = torch.topk(c, min(E, c.shape[1]), dim=1, largest=False)
+        bv = torch.cat([bv, v], 1)
+        bi = torch.cat([bi, i + s], 1)
+        if bv.shape[1] > E:
+            v, j = torch.topk(bv, E, dim=1, largest=False)
+            bv, bi = v, torch.gather(bi, 1, j)
+    return bi
 
 
 def candidates(cat_dist, L=32, n_near=24, rng_seed=0):
@@ -114,15 +198,16 @@ def greedy_cover(maskd, weights, cand, cat_dist, pool_t, E):
     return seeds.to(torch.int32), fallbacks / max(1, Q * E)
 
 
-def select(Qg, Xg, pool_t, reps_t, maskd, E, tau, L=32, n_near=24, rng_seed=0):
+def select(Qg, Xg, pool_t, reps_t, maskd, E, tau, L=32, n_near=24, rng_seed=0,
+           Vp=None, precision="tf32"):
     """The whole of A's online path, as one call."""
-    cat = catalog_scores(Qg, Xg, pool_t)
+    cat = catalog_scores(Qg, Xg, pool_t, Vp=Vp, precision=precision)
     cand = candidates(cat, L=L, n_near=n_near, rng_seed=rng_seed)
     w = region_weights(Qg, Xg, reps_t, tau)
     return greedy_cover(maskd, w, cand, cat, pool_t, E)
 
 
-def select_spread(Qg, Xg, pool_t, E, n_cand=64):
+def select_spread(Qg, Xg, pool_t, E, n_cand=64, Vp=None, precision="tf32"):
     """Near the query, but spread apart from each other.
 
     The documents a search never reaches are not far from the query -- they are
@@ -135,7 +220,7 @@ def select_spread(Qg, Xg, pool_t, E, n_cand=64):
     No sketch, no regions, no probe. The only extra cost over distance ordering
     is one n_cand x n_cand Gram matrix per query.
     """
-    cat = catalog_scores(Qg, Xg, pool_t)                          # [Q, P]
+    cat = catalog_scores(Qg, Xg, pool_t, Vp=Vp, precision=precision)  # [Q, P]
     cand = torch.topk(cat, n_cand, dim=1, largest=False).indices  # [Q, C]
     V = Xg[pool_t.long()][cand]                                   # [Q, C, D]
     pair = 1.0 - torch.bmm(V, V.transpose(1, 2))                  # [Q, C, C]
@@ -153,7 +238,7 @@ def select_spread(Qg, Xg, pool_t, E, n_cand=64):
     return torch.gather(ids, 1, chosen).to(torch.int32)
 
 
-def select_mmr(Qg, Xg, pool_t, E, lam=0.5, n_cand=64):
+def select_mmr(Qg, Xg, pool_t, E, lam=0.5, n_cand=64, Vp=None, precision="tf32"):
     """Near the query, and unlike each other, with the trade-off exposed.
 
     Two documents' plain similarity predicts whether they sit in the same
@@ -166,7 +251,7 @@ def select_mmr(Qg, Xg, pool_t, E, lam=0.5, n_cand=64):
 
     lam = 1 is plain nearest; lam = 0 is the spread arm that failed.
     """
-    cat = catalog_scores(Qg, Xg, pool_t)                          # [Q, P] distances
+    cat = catalog_scores(Qg, Xg, pool_t, Vp=Vp, precision=precision)  # [Q, P] distances
     cand = torch.topk(cat, n_cand, dim=1, largest=False).indices  # [Q, C]
     V = Xg[pool_t.long()][cand]                                   # [Q, C, D]
     pair = torch.bmm(V, V.transpose(1, 2))                        # similarity

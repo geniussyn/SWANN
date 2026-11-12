@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--deg", type=int, default=64)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--keep-degenerate", action="store_true",
+                    help="keep zero-length rows; they are dropped by default "
+                         "because cosine does not define their neighbours")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
@@ -56,8 +59,25 @@ def main():
         X = np.pad(X, ((0, 0), (0, pad)))
         Qall = np.pad(Qall, ((0, 0), (0, pad)))
     if metric == "ip":
-        X /= np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
-        Qall /= np.maximum(np.linalg.norm(Qall, axis=1, keepdims=True), 1e-12)
+        xn = np.linalg.norm(X, axis=1, keepdims=True)
+        qn = np.linalg.norm(Qall, axis=1, keepdims=True)
+        if not a.keep_degenerate:
+            # A zero-length row has no direction, so cosine says nothing about
+            # it: its similarity to everything is 0, its place in a ground-truth
+            # list is arbitrary, and a clustering index collects all of them in
+            # one cell that then pollutes every probe that reaches it. On
+            # ann-benchmarks' nytimes-256 that is 239 documents and 7 queries,
+            # enough to make IVF recall fall as the probe count rises. They are
+            # dropped rather than kept at zero.
+            keep_x = (xn[:, 0] > 1e-12)
+            keep_q = (qn[:, 0] > 1e-12)
+            nd, nq = int((~keep_x).sum()), int((~keep_q).sum())
+            if nd or nq:
+                print(f"  dropped {nd:,} zero-length documents and {nq:,} queries")
+            X, xn = X[keep_x], xn[keep_x]
+            Qall, qn = Qall[keep_q], qn[keep_q]
+        X /= np.maximum(xn, 1e-12)
+        Qall /= np.maximum(qn, 1e-12)
     X = np.ascontiguousarray(X, dtype=np.float32)
     Qall = np.ascontiguousarray(Qall, dtype=np.float32)
 

@@ -60,6 +60,14 @@ class Arms:
         # Optional second level: a graph over the pool, so the nearest entries
         # are found by a short search instead of a scan of all P.
         self.poolX = self.poolG = None
+        # The catalogue is offline metadata, so gather it once rather than once
+        # per selection: 537 MB of copy at P=131072, charged to every batch.
+        self.catX = select_a.pool_vectors(Xg, self.pool_t)
+        # The catalogue scan decides starting points, not answers, and it is a
+        # dense matmul over a few thousand vectors: tf32 already costs nothing
+        # in entries, and on a half-precision corpus fp16 halves it again.
+        self.cat_precision = "fp16" if Xg.dtype == torch.float16 else "tf32"
+        self.cat_slice = 8192
         px = Path(data) / "pools" / f"poolX_{pool_name}.npy"
         pg = Path(data) / "pools" / f"poolG_{pool_name}.npy"
         if px.exists() and pg.exists():
@@ -79,6 +87,8 @@ class Arms:
         return True
 
     mmr_lam = 0.5
+    strata_near = 0.5      # fraction of E taken as the plain nearest entries
+    strata_depth = 512     # how deep into the query's pool ordering the rest reach
     hier_budget = 24
     hier_entry_seeds = 4
     hier_m = 32
@@ -99,10 +109,41 @@ class Arms:
         t0, t1 = torch.cuda.Event(True), torch.cuda.Event(True)
         torch.cuda.synchronize(); t0.record()
         if arm in ("distance", "single"):
-            cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t, self.metric)
-            near = torch.topk(cat, E, dim=1, largest=False).indices
+            near = select_a.select_nearest(self.Qg, self.catX, E, metric=self.metric,
+                                           precision=self.cat_precision,
+                                           slice_P=self.cat_slice)
             seeds = self.pool_t[near]
             info = {}
+        elif arm == "strata":
+            # The entries that would reach an isolated answer sit well outside
+            # the nearest E: for answers we miss and that are alone in their
+            # piece, the nearest pool node to the answer has median query-rank
+            # 139, against 6 for the answers we find. Distance ordering alone
+            # never offers that entry at E=32. So take the nearest half as
+            # before and spend the other half on ranks spread evenly down to
+            # strata_depth, buying coverage of the far pieces at the same E.
+            cat = select_a.catalog_scores(self.Qg, self.Xg, self.pool_t, self.metric,
+                                          Vp=self.catX, precision=self.cat_precision)
+            nn = max(1, int(round(E * self.strata_near)))
+            nn = min(nn, E)
+            depth = min(self.strata_depth, self.P)
+            order = torch.topk(cat, depth, dim=1, largest=False).indices    # [Q, depth]
+            far = E - nn
+            if far > 0:
+                step = torch.linspace(nn, depth - 1, far, device=order.device)
+                pick = torch.cat([torch.arange(nn, device=order.device),
+                                  step.round().to(torch.long)])
+                pick = torch.unique(pick)
+                # unique() can collapse ties when depth is barely above E; top up
+                # from the next unused near ranks so every query still gets E.
+                if pick.numel() < E:
+                    spare = torch.arange(depth, device=order.device)
+                    spare = spare[~torch.isin(spare, pick)][: E - pick.numel()]
+                    pick = torch.cat([pick, spare])
+            else:
+                pick = torch.arange(E, device=order.device)
+            seeds = self.pool_t[order[:, pick[:E]]]
+            info = {"near": nn, "depth": depth}
         elif arm == "oracle":
             # Diagnostic only: start from the query's exact top-E. No mechanism
             # can place entries better than this, so whatever a hierarchy could
@@ -113,23 +154,27 @@ class Arms:
             # One short search in the pool index gives the E nearest entries, at
             # a few hundred distances instead of P.
             st = engine.init_states(self.poolX, self.Qg, self.hier_seeds(E),
-                                    m=max(self.hier_m, E), max_expansions=self.hier_budget,
-                                    deg=self.poolG.shape[1], team_size=16,
+                                    L=max(self.hier_m, E), B=self.hier_budget,
+                                    D=self.poolG.shape[1], team_size=16,
+                                    metric=self.metric, kstop=E,
                                     policy=engine.POLICY_ROUND_ROBIN)
             engine.advance(self.poolX, self.poolG, self.Qg, st, self.hier_budget)
             idx = st.ids[:, 0, :E].long().clamp(min=0)
             seeds = self.pool_t[idx]
             info = {"hier_dist": float(st.dist_evals.sum(1).float().mean())}
         elif arm == "mmr":
-            seeds = select_a.select_mmr(self.Qg, self.Xg, self.pool_t, E, lam=self.mmr_lam)
+            seeds = select_a.select_mmr(self.Qg, self.Xg, self.pool_t, E, lam=self.mmr_lam,
+                                       Vp=self.catX, precision=self.cat_precision)
             info = {"lam": self.mmr_lam}
         elif arm == "spread":
-            seeds = select_a.select_spread(self.Qg, self.Xg, self.pool_t, E)
+            seeds = select_a.select_spread(self.Qg, self.Xg, self.pool_t, E,
+                                          Vp=self.catX, precision=self.cat_precision)
             info = {}
         elif arm == "sketch":
             seeds, fb = select_a.select(self.Qg, self.Xg, self.pool_t, self.reps_t, self.maskd,
                                         E, self.tau, L=self.L, n_near=self.n_near,
-                                        rng_seed=self.rng_seed)
+                                        rng_seed=self.rng_seed, Vp=self.catX,
+                                        precision=self.cat_precision)
             info = {"fallback_rate": round(fb, 4)}
         else:
             raise ValueError(arm)
@@ -151,6 +196,18 @@ def main():
     ap.add_argument("--L-cand", dest="L_cand", type=int, default=32,
                     help="candidate list size for the A/MMR selectors")
     ap.add_argument("--n-near", type=int, default=24)
+    ap.add_argument("--cat-slice", type=int, default=8192,
+                    help="entries scored per slice in the fused nearest-entry "
+                         "selection; the result is exact at any value")
+    ap.add_argument("--cat-precision", default="tf32", choices=["fp32", "tf32", "fp16"],
+                    help="precision of the catalogue matmul only; the search "
+                         "itself is unaffected. tf32 picks the identical entries")
+    ap.add_argument("--strata-near", type=float, default=0.5,
+                    help="strata arm: fraction of V taken as the plain nearest "
+                         "entries; the rest are spread down to --strata-depth")
+    ap.add_argument("--strata-depth", type=int, default=512,
+                    help="strata arm: deepest query-rank in the pool an entry "
+                         "may come from")
     ap.add_argument("--total-B", dest="total_B", type=int, default=128,
                     help="expansions per query when B is not given, split across branches")
     ap.add_argument("--B", type=int, default=0, help="expansions per branch; 0 = total // V")
@@ -167,7 +224,22 @@ def main():
                     help="shared only: always the nearest candidate, or each lineage in turn")
     ap.add_argument("--metric", default=None, choices=["ip", "l2"],
                     help="default: read it from the corpus manifest")
-    ap.add_argument("--team", type=int, default=32)
+    ap.add_argument("--team", type=int, default=None,
+                    help="lanes per vector; default picks from the dimension "
+                         "and dtype (engine.auto_team)")
+    ap.add_argument("--chunk", type=int, default=0,
+                    help="advance in chunks of this many expansions, re-forming "
+                         "the grid over the branches still running; 0 = one call")
+    ap.add_argument("--elide-visited", action="store_true",
+                    help="drop the per-branch visited table and let the shared "
+                         "cache do the dedup (exclusive mode, one seed per branch)")
+    ap.add_argument("--crowd", type=float, default=0.0,
+                    help="retire a lineage after two expansions in which this "
+                         "fraction of neighbours was already covered (own visited "
+                         "or another branch's claim); 0 disables it")
+    ap.add_argument("--stall", type=int, default=0,
+                    help="give up on a branch after this many expansions without "
+                         "improving its k-th best distance; 0 disables it")
     ap.add_argument("--exclusive", action="store_true",
                     help="a node claimed by one branch is off limits to the others")
     ap.add_argument("--bound", action="store_true",
@@ -213,6 +285,10 @@ def main():
                 metric=metric_id)
     arms.hier_budget, arms.hier_entry_seeds, arms.hier_m = a.hier_budget, a.hier_seeds, a.hier_m
     arms.mmr_lam = a.mmr_lam
+    arms.cat_precision = a.cat_precision
+    arms.cat_slice = a.cat_slice
+    arms.strata_near = a.strata_near
+    arms.strata_depth = a.strata_depth
     Xs = Xg.half().contiguous() if a.half else Xg       # what the search reads
     for w in a.arms:                                              # warm every arm it will time
         if arms.supports(w) and w != "random":
@@ -225,7 +301,7 @@ def main():
     print(f"{'arm':13s} {'V':>3s} {'B':>4s} {'recall@10':>10s} {'dist/q':>8s} {'sel ms':>7s} "
           f"{'search ms':>10s} {'total ms':>9s} {'QPS':>8s}"
           + (f" {'hard@10':>9s}" if a.hard is not None else ""))
-    rows, perq = [], []
+    rows, perq, perexp = [], [], []
     policy = engine.POLICY_ROUND_ROBIN if a.policy == "rr" else engine.POLICY_BEST
     for V in a.V:
         # A shared state spends the whole budget; independent branches split it.
@@ -245,7 +321,11 @@ def main():
                 ids, dist, st = engine.search(Xs, Gg, Qg, seeds, k=a.k, L=a.L,
                                               B=B, team_size=a.team, policy=policy,
                                               metric=metric_id,
-                                              stop_eps=a.stop_eps, shared_cache=a.cache,
+                                              stop_eps=a.stop_eps, stall_patience=a.stall,
+                                              crowd_frac=a.crowd,
+                                              elide_visited=a.elide_visited,
+                                              chunk=a.chunk,
+                                              shared_cache=a.cache,
                                               shared_bound=a.bound, exclusive=a.exclusive)
                 torch.cuda.synchronize(); ms = (time.perf_counter() - t) * 1e3
                 if r:
@@ -256,13 +336,24 @@ def main():
             rec = float(pq.mean())
             if a.save_perquery:
                 perq.append(pq)
+                perexp.append(st.expansions.sum(1).cpu().numpy())
             rec_hard = recall_at_k(got[hard_idx], gt[hard_idx]) if hard_idx is not None else None
             de = float(st.dist_evals.sum(1).float().mean())
             tot = best + sel_ms
             name = "single" if (V == 1 and arm == "distance") else arm
             if a.fanout == "shared" and V > 1:
                 name = f"{name}/{a.policy}"
-            rows.append(dict(arm=name, E=V, B=B, L=a.L, fanout=a.fanout, policy=a.policy,
+            rows.append(dict(arm=name, E=V, B=B, L=a.L, graph=a.graph,
+                             fanout=a.fanout, policy=a.policy,
+                             J=int(st.ids.shape[1]), V_per_branch=int(st.V),
+                             cache=bool(st.cache_id.numel() > 0),
+                             bound=bool(st.bound.numel() > 0),
+                             exclusive=bool(st.exclusive), stall=a.stall, crowd=a.crowd,
+                             H=int(st.visited.shape[2]), chunk=a.chunk,
+                             eff_fanout=float(st.counters[..., 8].sum().item() /
+                                              max(int(st.counters[..., 9].sum().item()), 1)),
+                             crowded_frac=float((st.crowded > 0).float().mean()),
+                             stalled_frac=float((st.stalled > 0).float().mean()),
                              stop_eps=a.stop_eps, expansions=float(st.expansions.sum(1).float().mean()),
                              recall=rec, recall_hard=rec_hard, dist_per_q=de,
                              select_ms=sel_ms, search_ms=best, total_ms=tot,
@@ -275,7 +366,9 @@ def main():
     if a.save_perquery:
         a.save_perquery.parent.mkdir(parents=True, exist_ok=True)
         np.savez(a.save_perquery, perq=np.array(perq),
-                 labels=np.array([f"L{r['L']}_V{r['E']}_B{r['B']}" for r in rows]))
+                 expansions=np.array(perexp),
+                 labels=np.array([f"L{r['L']}_V{r['E']}_B{r['B']}_e{r['stop_eps']}"
+                                  for r in rows]))
         print(f"\nwrote {a.save_perquery}")
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

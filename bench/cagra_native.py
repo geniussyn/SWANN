@@ -105,7 +105,8 @@ def main():
         print(f"from_graph: wrapped our deg={G.shape[1]} knn graph in {time.perf_counter()-t:.2f}s")
     if "built" in a.arms:
         t = time.perf_counter()
-        ip = cagra.IndexParams(metric=a.metric, graph_degree=man["deg"],
+        ip = cagra.IndexParams(metric=a.metric,
+                               graph_degree=man.get("deg", G.shape[1]),
                                intermediate_graph_degree=2 * man["deg"])
         indexes["built"] = cagra.build(ip, Xd, resources=res)
         res.sync()
